@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6E1E2B">
+<title>GMC 108 Event Map</title>
+<!--
+  ============================================================
+  SETUP: paste your web map's item ID below (the code after "id="
+  in the web map's address in ArcGIS Online). The web map and its
+  three layers must be shared with Everyone.
+  ============================================================
+-->
+<script>
+  window.GMC_CONFIG = {
+    WEBMAP_ID: "8c692c1a95444a92b79993292e278226",
+    PORTAL_URL: "https://rgob.maps.arcgis.com",
+    USE_ESRI_IMAGERY: true,          // true = Esri satellite + labels (recommended for public use)
+    PUBLIC_ONLY: true                // true = hide coordinator-only features
+  };
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://js.arcgis.com/4.30/esri/themes/light/main.css">
+<style>
+:root{
+  --maroon:#6E1E2B; --maroon-deep:#521520; --ink:#1E2A2F; --ink-soft:#56636A;
+  --mist:#F5F6F2; --paper:#FFFFFF; --line:#DDE1DA; --tab-on:#F8EBD0;
+  --display:'Sora','Segoe UI',system-ui,sans-serif; --body:'Noto Sans','Segoe UI',system-ui,sans-serif;
+  --peek:150px;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:var(--body);color:var(--ink);background:var(--mist);overflow:hidden;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:3px solid #F2A900;outline-offset:2px}
+#view{position:fixed;inset:0}
+
+.top{position:fixed;left:0;right:0;top:0;z-index:20;padding:calc(env(safe-area-inset-top,0px) + 10px) 12px 0;pointer-events:none}
+.bar{pointer-events:auto;background:var(--maroon);color:#fff;border-radius:18px;padding:12px 14px;box-shadow:0 6px 20px rgba(82,21,32,.28)}
+.bar h1{font-family:var(--display);font-weight:700;font-size:18px;margin:0;line-height:1.2}
+.bar p{margin:3px 0 0;font-size:12.5px;opacity:.85}
+
+/* move Esri widgets below the header */
+.esri-ui-top-right{top:calc(env(safe-area-inset-top,0px) + 100px)!important}
+.esri-ui-top-left{top:calc(env(safe-area-inset-top,0px) + 100px)!important}
+.esri-ui-bottom-right,.esri-ui-bottom-left{bottom:calc(var(--peek) + 6px)!important}
+.esri-search{width:220px}
+
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--paper);border-radius:22px 22px 0 0;
+  box-shadow:0 -8px 28px rgba(30,42,47,.18);display:flex;flex-direction:column;height:min(74vh,660px);
+  transform:translateY(calc(100% - var(--peek) - env(safe-area-inset-bottom,0px)));transition:transform .28s cubic-bezier(.2,.8,.2,1);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+.sheet.open{transform:translateY(0)}
+.handle{border:0;background:transparent;width:100%;padding:10px 0 6px;display:grid;place-items:center;flex:none}
+.handle span{width:44px;height:5px;border-radius:3px;background:#C9CEC6}
+.tabs{display:flex;gap:4px;padding:0 14px 10px;border-bottom:1px solid var(--line);flex:none}
+.tab{flex:1;border:0;border-radius:12px;padding:11px 4px;font-size:13px;font-weight:700;background:var(--mist);color:var(--ink-soft)}
+.tab[aria-selected="true"]{background:var(--tab-on);color:var(--maroon-deep)}
+.pane{flex:1;overflow-y:auto;padding:12px 16px 24px;-webkit-overflow-scrolling:touch}
+.pane[hidden]{display:none}
+.pane h2{font-family:var(--display);font-size:15px;font-weight:600;margin:4px 0 8px}
+.hint{font-size:13px;color:var(--ink-soft);line-height:1.45;margin:0 0 10px}
+.cta{width:100%;height:46px;border:0;border-radius:14px;background:var(--maroon);color:#fff;font-weight:700;font-size:14.5px;margin-bottom:6px}
+.group{font-size:12.5px;font-weight:700;color:var(--ink-soft);margin:14px 0 2px}
+.row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;background:transparent;padding:10px 2px;border-bottom:1px solid #EEF0EC;min-height:54px}
+.badge{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:12px;flex:none}
+.row .txt{flex:1;min-width:0}
+.row b{display:block;font-weight:600;font-size:14.5px;line-height:1.3}
+.row small{display:block;font-size:12.5px;color:var(--ink-soft);margin-top:2px}
+.row .dist{text-align:right;font-weight:600;font-size:13px;flex:none}
+.row .dist small{font-weight:400}
+.kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.kpi{background:var(--mist);border-radius:16px;padding:12px}
+.kpi strong{display:block;font-family:var(--display);font-size:26px;font-weight:700;color:var(--maroon);letter-spacing:-.02em}
+.kpi span{font-size:12.5px;color:var(--ink-soft);line-height:1.35}
+.bar-row{display:grid;grid-template-columns:132px minmax(0,1fr) 52px;gap:8px;align-items:center;font-size:12.5px;padding:5px 0;width:100%;border:0;background:none;text-align:left}
+.bar-row span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{height:10px;border-radius:5px;background:#EEF0EC;overflow:hidden}
+.fill{height:100%;border-radius:5px;background:#4E7D23}
+.bar-row b{text-align:right}
+.rt-field{display:flex;align-items:center;gap:12px;padding:8px 0}
+.rt-field small{display:block;font-size:12px;color:var(--ink-soft)}
+.rt-field b{font-size:14.5px;font-weight:600}
+.rt-dot{width:14px;height:14px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px #C9CEC6;flex:none}
+.rt-btns{display:flex;gap:8px;margin:0 0 6px 26px;flex-wrap:wrap}
+.chip-btn{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:8px 12px;font-size:13px;font-weight:600;min-height:40px}
+.chip-btn.on{border-color:var(--maroon);color:var(--maroon);box-shadow:inset 0 0 0 1px var(--maroon)}
+.seg{display:flex;gap:4px;background:var(--mist);border-radius:12px;padding:4px;margin:8px 0 12px}
+.seg button{flex:1;border:0;background:transparent;border-radius:9px;padding:9px;font-weight:700;font-size:13.5px;color:var(--ink-soft)}
+.seg button[aria-pressed="true"]{background:var(--maroon);color:#fff}
+.rt-sum{background:var(--tab-on);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+.rt-sum strong{font-family:var(--display);font-size:22px;color:var(--maroon-deep)}
+.rt-sum span{font-size:13px;color:var(--ink-soft);margin-left:6px}
+.step{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #EEF0EC;font-size:14px;line-height:1.4}
+.step i{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;font-style:normal;font-size:12px;font-weight:700}
+.step small{display:block;color:var(--ink-soft);font-size:12.5px}
+.warn{background:#FFF6DE;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.45;margin-top:8px}
+.footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
+.msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
+.msg div{max-width:420px;line-height:1.5}
+.msg h2{font-family:var(--display);color:var(--maroon)}
+
+@media (min-width:900px){
+  .top{width:420px;padding-left:16px}
+  .sheet{left:16px;right:auto;width:400px;bottom:16px;border-radius:22px;height:calc(100vh - 140px);transform:none}
+  .handle{display:none}
+  .esri-ui-top-left,.esri-ui-top-right{top:16px!important}
+  .esri-ui-top-left{left:430px!important}
+  .esri-ui-bottom-right,.esri-ui-bottom-left{bottom:16px!important}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="view" aria-label="Event map"></div>
+
+<header class="top">
+  <div class="bar">
+    <h1>GMC 108 Event Map</h1>
+    <p>Gelephu · parking, shuttles, stays and venue access</p>
+  </div>
+</header>
+
+<section class="sheet" id="sheet" aria-label="Details panel">
+  <button class="handle" id="handle" aria-label="Expand or collapse panel"><span></span></button>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="near" aria-selected="true">Nearby</button>
+    <button class="tab" role="tab" data-tab="route" aria-selected="false">Route</button>
+    <button class="tab" role="tab" data-tab="layers" aria-selected="false">Layers</button>
+    <button class="tab" role="tab" data-tab="overview" aria-selected="false">Overview</button>
+  </div>
+  <div class="pane" id="pane-near">
+    <h2 id="nearTitle">Closest to you</h2>
+    <p class="hint" id="nearHint">Find the closest parking, bus and taxi stands, toilets and tented stays. Your location stays on your phone.</p>
+    <button class="cta" id="useLoc">Use my location</button>
+    <div id="nearList"></div>
+  </div>
+  <div class="pane" id="pane-route" hidden>
+    <h2>Route on event roads and paths</h2>
+    <p class="hint" id="routeHint">Uses the public bus routes, diversions, access roads and footpaths from the event plan.</p>
+    <div class="rt-field"><span class="rt-dot" style="background:#1A73E8"></span><div><small>From</small><b id="rtFrom">Not set</b></div></div>
+    <div class="rt-btns"><button class="chip-btn" id="rtFromLoc">Use my location</button><button class="chip-btn" id="rtFromMap">Tap on the map</button></div>
+    <div class="rt-field"><span class="rt-dot" style="background:#6E1E2B"></span><div><small>To</small><b id="rtTo">Not set</b></div></div>
+    <div class="rt-btns"><button class="chip-btn" id="rtToZeray">Zeray venue</button><button class="chip-btn" id="rtToMap">Tap on the map</button></div>
+    <p class="hint" style="margin-top:6px">Or open any place on the map and choose <b>Route here</b>.</p>
+    <div class="seg" role="group" aria-label="Travel mode">
+      <button id="mWalk" aria-pressed="true">Walking</button><button id="mDrive" aria-pressed="false">By vehicle</button>
+    </div>
+    <div id="rtResult"></div>
+  </div>
+  <div class="pane" id="pane-layers" hidden>
+    <h2>Show on map</h2>
+    <div id="layerList"></div>
+    <h2 style="margin-top:16px">Map key</h2>
+    <div id="legend"></div>
+  </div>
+  <div class="pane" id="pane-overview" hidden>
+    <h2>At a glance</h2>
+    <div class="kpis" id="kpis"><div class="kpi"><strong>…</strong><span>Loading</span></div></div>
+    <h2 style="margin-top:18px">Tented stays by capacity</h2>
+    <div id="tentBars"></div>
+    <h2 style="margin-top:18px">Zeray parking by lot</h2>
+    <div id="lotBars"></div>
+    <p class="footer">Map data from the GMC 108 planning team. Routes and parking may change on the day; follow instructions from marshals and police.</p>
+  </div>
+</section>
+
+<script src="https://js.arcgis.com/4.30/"></script>
+<script>
+// Pure routing helpers (no ArcGIS dependency) - shared by the app and tests
+const GMCRouter = (() => {
+  const R = 6371000, rad = Math.PI / 180;
+  // local equirectangular projection around Gelephu (metres)
+  const LAT0 = 26.88, KX = Math.cos(LAT0 * rad) * R * rad, KY = R * rad;
+  const toXY = (lon, lat) => [lon * KX, lat * KY];
+  const toLL = (x, y) => [x / KX, y / KY];
+  const d2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+  function build(lines, opts = {}) {
+    // lines: [{name, category, paths:[[[lon,lat],...]]}]
+    const SNAP = opts.snap || 50, PEN = opts.switchPenalty ?? 150;
+    const nodes = [], adj = [], grid = new Map(), CELL = SNAP;
+    const key = (x, y) => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+    function addNode(p) { nodes.push(p); adj.push([]); const k = key(p[0], p[1]); (grid.get(k) || grid.set(k, []).get(k)).push(nodes.length - 1); return nodes.length - 1; }
+    function edge(a, b, info) { if (a === b) return; const len = d2(nodes[a], nodes[b]); const w = len + (info.category === 'connector' ? PEN : 0); adj[a].push({ to: b, w, len, info }); adj[b].push({ to: a, w, len, info }); }
+    const segs = []; // [a,b,info,lineIdx]
+    lines.forEach((ln, li) => {
+      const info = { name: ln.name, category: ln.category, line: li };
+      ln.paths.forEach(path => {
+        let prev = null;
+        path.forEach(c => {
+          const id = addNode(toXY(c[0], c[1]));
+          nodes[id].line = li;
+          if (prev !== null) { edge(prev, id, info); segs.push([prev, id, info, li]); }
+          prev = id;
+        });
+      });
+    });
+    // segment grid for snapping
+    const sgrid = new Map();
+    segs.forEach((s, si) => {
+      const a = nodes[s[0]], b = nodes[s[1]];
+      const x0 = Math.floor((Math.min(a[0], b[0]) - SNAP) / CELL), x1 = Math.floor((Math.max(a[0], b[0]) + SNAP) / CELL);
+      const y0 = Math.floor((Math.min(a[1], b[1]) - SNAP) / CELL), y1 = Math.floor((Math.max(a[1], b[1]) + SNAP) / CELL);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const k = x + ',' + y; (sgrid.get(k) || sgrid.set(k, []).get(k)).push(si); }
+    });
+    const join = { name: null, category: 'connector' };
+    const nVert = nodes.length;
+    for (let v = 0; v < nVert; v++) {
+      const p = nodes[v], li = p.line;
+      const cand = sgrid.get(key(p[0], p[1])) || [];
+      const bestPerLine = new Map();
+      cand.forEach(si => {
+        const s = segs[si]; if (s[3] === li) return;
+        const a = nodes[s[0]], b = nodes[s[1]];
+        const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+        let t = L2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+        const q = [a[0] + t * dx, a[1] + t * dy], dist = d2(p, q);
+        if (dist <= SNAP && (!bestPerLine.has(s[3]) || bestPerLine.get(s[3]).dist > dist)) bestPerLine.set(s[3], { si, q, t, dist });
+      });
+      bestPerLine.forEach(({ si, q, t }) => {
+        const s = segs[si];
+        if (t <= 0.001) edge(v, s[0], join);
+        else if (t >= 0.999) edge(v, s[1], join);
+        else { const n = addNode(q); edge(s[0], n, s[2]); edge(n, s[1], s[2]); edge(v, n, join); }
+      });
+    }
+    return { nodes, adj, nVert };
+  }
+
+  function nearestNode(g, lon, lat, allow) {
+    const p = toXY(lon, lat); let best = -1, bd = Infinity;
+    for (let i = 0; i < g.nodes.length; i++) { if (allow && !allow(i)) continue; const d = d2(p, g.nodes[i]); if (d < bd) { bd = d; best = i; } }
+    return { id: best, dist: bd };
+  }
+
+  function route(g, from, to, mode) {
+    // from/to: [lon,lat]; mode: 'walk' | 'drive'
+    const ok = e => mode !== 'drive' || e.info.category !== 'Footpath';
+    const usable = new Uint8Array(g.nodes.length);
+    g.adj.forEach((es, i) => { if (es.some(ok)) usable[i] = 1; });
+    const s = nearestNode(g, from[0], from[1], i => usable[i]);
+    const t = nearestNode(g, to[0], to[1], i => usable[i]);
+    if (s.id < 0 || t.id < 0) return null;
+    const N = g.nodes.length, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), pinfo = new Array(N), plen = new Float64Array(N);
+    dist[s.id] = 0;
+    // binary heap
+    const heap = [[0, s.id]];
+    const push = x => { heap.push(x); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+    const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+    while (heap.length) {
+      const [d, u] = pop(); if (d > dist[u]) continue; if (u === t.id) break;
+      for (const e of g.adj[u]) { if (!ok(e)) continue; const nd = d + e.w; if (nd < dist[e.to]) { dist[e.to] = nd; prev[e.to] = u; pinfo[e.to] = e.info; plen[e.to] = e.len; push([nd, e.to]); } }
+    }
+    if (dist[t.id] === Infinity) return { ok: false, startGap: s.dist, endGap: t.dist };
+    const seq = []; for (let v = t.id; v !== -1; v = prev[v]) seq.push(v); seq.reverse();
+    let netLen = 0; for (let i = 1; i < seq.length; i++) netLen += plen[seq[i]];
+    // steps
+    const steps = [], coords = seq.map(i => toLL(...g.nodes[i]));
+    if (s.dist > 15) steps.push({ kind: 'walk', text: 'Walk to the start of the route', m: s.dist });
+    let cur = null;
+    for (let i = 1; i < seq.length; i++) {
+      const info = pinfo[seq[i]], w = plen[seq[i]];
+      if (info.category === 'connector') { if (cur) cur.m += w; continue; }
+      if (cur && cur.name === info.name) cur.m += w;
+      else { cur = { kind: 'line', name: info.name, category: info.category, m: w }; steps.push(cur); }
+    }
+    if (t.dist > 15) steps.push({ kind: 'walk', text: 'Walk to your destination', m: t.dist });
+    const merged = steps.filter(x => x.m >= 20 || x.kind === 'walk');
+    return { ok: true, coords, steps: merged, total: netLen + s.dist + t.dist, network: netLen, startGap: s.dist, endGap: t.dist,
+             fromLL: from, toLL: to };
+  }
+  return { build, route, nearestNode };
+})();
+
+
+</script>
+<script>
+const CFG = window.GMC_CONFIG;
+function showMsg(title, text){
+  const m = document.createElement('div'); m.className = 'msg';
+  m.innerHTML = `<div><h2>${title}</h2><p>${text}</p></div>`; document.body.appendChild(m);
+}
+if (!CFG.WEBMAP_ID || CFG.WEBMAP_ID.startsWith('PASTE')) {
+  showMsg('Almost ready', 'Open this file in a text editor and paste your web map item ID where it says PASTE_YOUR_WEBMAP_ID_HERE.');
+} else {
+require([
+  "esri/config", "esri/WebMap", "esri/views/MapView", "esri/widgets/Locate", "esri/widgets/Search",
+  "esri/widgets/Home", "esri/widgets/LayerList", "esri/widgets/Legend", "esri/Graphic",
+  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils"
+], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils) => {
+  esriConfig.portalUrl = CFG.PORTAL_URL;
+
+  const webmap = new WebMap({ portalItem: { id: CFG.WEBMAP_ID } });
+  const view = new MapView({
+    container: "view", map: webmap,
+    popup: { dockEnabled: true, dockOptions: { buttonEnabled: false, breakpoint: { width: 900 }, position: "top-center" } }
+  });
+  view.ui.move("zoom", "top-right");
+
+  const locate = new Locate({ view, useHeadingEnabled: false, goToOverride: (v, o) => { o.target.scale = 8000; return v.goTo(o.target); } });
+  view.ui.add(locate, "top-right");
+  const home = new Home({ view });
+  view.ui.add(home, "top-right");
+  const search = new Search({ view, popupEnabled: true, includeDefaultSources: true,
+    allPlaceholder: "Search event places or addresses", maxSuggestions: 8 });
+  view.ui.add(search, "top-left");
+
+  let L = { points: null, lines: null, polygons: null };
+  let me = null;
+
+  webmap.load().then(() => {
+    if (CFG.USE_ESRI_IMAGERY) webmap.basemap = "hybrid";
+    // open on Gelephu town and make the Home button return here
+    view.when(() => view.goTo({ center: [90.495, 26.879], zoom: window.innerWidth < 900 ? 14 : 15 }, { animate: false })
+      .then(() => { home.viewpoint = view.viewpoint.clone(); }));
+    const feats = webmap.allLayers.filter(l => l.type === "feature");
+    const find = word => feats.find(l => l.title.toLowerCase().includes(word));
+    L.points = find("point"); L.lines = find("line"); L.polygons = find("polygon");
+    if (!L.points || !L.polygons) {
+      showMsg('Layers not found', 'The web map needs layers whose titles contain "Points", "Lines" and "Polygons".');
+      return;
+    }
+    if (CFG.PUBLIC_ONLY) feats.forEach(l => {
+      l.definitionExpression = l.definitionExpression ? `(${l.definitionExpression}) AND audience = 'Public'` : "audience = 'Public'";
+    });
+    setupSearch();
+    setupRouteAction();
+    buildNetwork();
+    new LayerList({ view, container: "layerList" });
+    new Legend({ view, container: "legend" });
+    loadOverview();
+    renderNear();
+  }).catch(err => {
+    console.error(err);
+    showMsg('Map could not load', 'Check the web map ID, and that the web map and its layers are shared with Everyone.');
+  });
+
+  locate.on("locate", e => {
+    me = [e.position.coords.latitude, e.position.coords.longitude];
+    if (pendingRouteFromLoc) { pendingRouteFromLoc = false; rtFrom = { ll: [me[1], me[0]], label: "My location" }; setTab('route'); openSheet(true); runRoute(); return; }
+    setTab('near'); renderNear(); openSheet(true);
+  });
+  locate.on("locate-error", () => { document.getElementById('nearHint').textContent = 'Location is off. Allow location access in your browser settings, then try again.'; });
+  document.getElementById('useLoc').onclick = () => locate.locate();
+
+  /* ---------- helpers ---------- */
+  const COLORS = {
+    "Venue parking":"#2563C9","Event parking":"#2563C9","East side parking":"#2563C9",
+    "Taxi stand":"#7B4FB5","Bus & taxi stand":"#0F7C80","Bus parking":"#0F7C80",
+    "Toilet":"#00838F","Tented accommodation":"#6A3D9A","Campsite":"#333333"
+  };
+  const GLYPH = {"Taxi stand":"T","Bus & taxi stand":"B","Bus parking":"B","Toilet":"WC","Tented accommodation":"▲","Campsite":"▲"};
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function dist(a, b){
+    const R=6371000, r=Math.PI/180, dLa=(b[0]-a[0])*r, dLo=(b[1]-a[1])*r;
+    const h=Math.sin(dLa/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(h));
+  }
+  const fmtD = m => m < 1000 ? `${Math.round(m/10)*10} m` : `${(m/1000).toFixed(1)} km`;
+  const travel = m => m < 2500 ? `${Math.max(1, Math.round(m/80))} min walk` : `${Math.max(1, Math.round(m/400))} min drive`;
+  const inList = arr => arr.map(v => `'${v.replace(/'/g, "''")}'`).join(",");
+
+  /* ---------- Nearby ---------- */
+  const GROUPS = [
+    { title: "Parking", layer: "points", cats: ["Venue parking", "Event parking"] },
+    { title: "Parking areas", layer: "polygons", cats: ["Event parking", "East side parking"] },
+    { title: "Bus & taxi stands", layer: "points", cats: ["Taxi stand", "Bus & taxi stand", "Bus parking"] },
+    { title: "Toilets", layer: "points", cats: ["Toilet"] },
+    { title: "Tented stays", layer: "polygons", cats: ["Tented accommodation", "Campsite"] }
+  ];
+  const nearCache = {};
+  async function renderNear(){
+    const list = document.getElementById('nearList');
+    const origin = me || [view.center.latitude, view.center.longitude];
+    document.getElementById('nearTitle').textContent = me ? 'Closest to you' : 'Closest to the map centre';
+    document.getElementById('useLoc').textContent = me ? 'Update my location' : 'Use my location';
+    let html = '';
+    for (const g of GROUPS) {
+      const lyr = L[g.layer]; if (!lyr) continue;
+      const key = g.title;
+      if (!nearCache[key]) {
+        const q = lyr.createQuery();
+        q.where = `category IN (${inList(g.cats)})` + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+        q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
+        try { nearCache[key] = (await lyr.queryFeatures(q)).features; } catch (e) { console.error(e); nearCache[key] = []; }
+      }
+      const seen = new Set();
+      const items = nearCache[key]
+        .filter(f => f.attributes.lat && f.attributes.lon)
+        .map(f => ({ f, d: dist(origin, [f.attributes.lat, f.attributes.lon]) }))
+        .sort((a, b) => a.d - b.d)
+        .filter(x => { const k = (x.f.attributes.descr || x.f.attributes.name) + x.f.attributes.lat.toFixed(4); if (seen.has(k)) return false; seen.add(k); return true; })
+        .slice(0, 3);
+      if (!items.length) continue;
+      html += `<div class="group">${g.title}</div>`;
+      items.forEach((x, i) => {
+        const a = x.f.attributes;
+        const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
+        const title = stand && a.descr ? a.descr : a.name;
+        let sub = a.category;
+        if (a.cap_veh > 0) sub += ` · ${a.cap_veh} vehicles`;
+        if (a.cap_people > 0) sub += ` · ${Number(a.cap_people).toLocaleString()} people`;
+        html += `<button class="row" data-g="${esc(key)}" data-i="${nearCache[key].indexOf(x.f)}">
+          <span class="badge" style="background:${COLORS[a.category] || '#555'}">${GLYPH[a.category] || 'P'}</span>
+          <span class="txt"><b>${esc(title)}</b><small>${esc(sub)}</small></span>
+          <span class="dist">${fmtD(x.d)}<small>${travel(x.d)}</small></span></button>`;
+      });
+    }
+    list.innerHTML = html || '<p class="hint">Nothing found yet. Try moving the map or using your location.</p>';
+    list.querySelectorAll('.row').forEach(b => b.onclick = () => openFeature(nearCache[b.dataset.g][+b.dataset.i]));
+  }
+  let moveTimer;
+  view.watch("stationary", s => { if (s && !me) { clearTimeout(moveTimer); moveTimer = setTimeout(renderNear, 400); } });
+
+  function openFeature(f){
+    if (window.innerWidth < 900) openSheet(false);
+    const g = f.geometry;
+    const go = g.type === "point" ? view.goTo({ target: g, scale: 5000 }) : view.goTo(g.extent.clone().expand(1.6));
+    go.then(() => view.openPopup({ features: [f], location: g.type === "point" ? g : g.centroid }));
+  }
+
+  /* ---------- Search: event data + addresses ---------- */
+  function setupSearch(){
+    const pub = CFG.PUBLIC_ONLY ? "audience = 'Public'" : "1=1";
+    const src = (layer, name) => layer && ({
+      layer, name, placeholder: "Search " + name.toLowerCase(),
+      searchFields: ["name", "descr", "location", "category"], displayField: "name",
+      suggestionTemplate: "{name} · {category}", exactMatch: false, outFields: ["*"],
+      maxSuggestions: 5, minSuggestCharacters: 2, filter: { where: pub }, zoomScale: 5000
+    });
+    search.sources = [src(L.points, "Event points"), src(L.polygons, "Event areas"), src(L.lines, "Event routes")].filter(Boolean);
+    search.when(() => {
+      search.defaultSources.forEach(ds => { ds.countryCode = "BTN"; ds.name = "Addresses and places"; ds.placeholder = "Search addresses and places"; });
+    });
+  }
+
+  /* ---------- Routing on public lines ---------- */
+  const ROUTE_CATS = ["D-Day bus to Zeray", "Public bus route", "Event shuttle", "Footpath", "Parking access road", "Traffic diversion", "Contingency parking"];
+  const routeLayer = new GraphicsLayer({ title: "Route", listMode: "hide" });
+  webmap.add(routeLayer);
+  let graph = null, rtFrom = null, rtTo = null, rtMode = "walk", picking = null;
+  async function buildNetwork(){
+    if (!L.lines) return;
+    const q = L.lines.createQuery();
+    q.where = `category IN (${inList(ROUTE_CATS)})` + (CFG.PUBLIC_ONLY ? " AND audience = 'Public'" : "");
+    q.outFields = ["name", "category"]; q.returnGeometry = true; q.outSpatialReference = { wkid: 4326 };
+    try {
+      const fs = (await L.lines.queryFeatures(q)).features;
+      graph = GMCRouter.build(fs.map(f => ({ name: f.attributes.name, category: f.attributes.category, paths: f.geometry.paths })), { snap: 50 });
+    } catch (e) { console.error(e); document.getElementById('routeHint').textContent = 'The route network could not be loaded.'; }
+  }
+  function setupRouteAction(){
+    [L.points, L.polygons].forEach(l => {
+      if (!l || !l.popupTemplate) return;
+      l.popupTemplate.actions = [{ id: "route-here", title: "Route here", icon: "walking", type: "button" }];
+    });
+    reactiveUtils.on(() => view.popup, "trigger-action", e => {
+      if (e.action.id !== "route-here") return;
+      const f = view.popup.selectedFeature; if (!f) return;
+      const a = f.attributes || {};
+      let ll = (a.lat && a.lon) ? [a.lon, a.lat] : null;
+      if (!ll) { const c = f.geometry.type === "point" ? f.geometry : f.geometry.centroid; ll = [c.longitude, c.latitude]; }
+      const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
+      rtTo = { ll, label: (stand && a.descr) ? a.descr : (a.name || "Selected place") };
+      view.closePopup();
+      if (!rtFrom && me) rtFrom = { ll: [me[1], me[0]], label: "My location" };
+      setTab('route'); openSheet(true); runRoute();
+    });
+  }
+  function setPick(which){
+    picking = which;
+    document.getElementById('rtFromMap').classList.toggle('on', which === 'from');
+    document.getElementById('rtToMap').classList.toggle('on', which === 'to');
+    if (which) { if (window.innerWidth < 900) openSheet(false); toast('Tap the map to choose the ' + (which === 'from' ? 'start' : 'destination')); }
+  }
+  view.on("click", e => {
+    if (!picking) return;
+    e.stopPropagation();
+    const pt = { ll: [e.mapPoint.longitude, e.mapPoint.latitude], label: "Point on map" };
+    if (picking === 'from') rtFrom = pt; else rtTo = pt;
+    setPick(null); setTab('route'); openSheet(true); runRoute();
+  });
+  document.getElementById('rtFromMap').onclick = () => setPick(picking === 'from' ? null : 'from');
+  document.getElementById('rtToMap').onclick = () => setPick(picking === 'to' ? null : 'to');
+  document.getElementById('rtFromLoc').onclick = () => { if (me) { rtFrom = { ll: [me[1], me[0]], label: "My location" }; runRoute(); } else { pendingRouteFromLoc = true; locate.locate(); } };
+  let pendingRouteFromLoc = false;
+  document.getElementById('rtToZeray').onclick = () => { rtTo = { ll: [90.5049, 26.8716], label: "Zeray venue" }; runRoute(); };
+  document.getElementById('mWalk').onclick = () => { rtMode = "walk"; modeBtns(); runRoute(); };
+  document.getElementById('mDrive').onclick = () => { rtMode = "drive"; modeBtns(); runRoute(); };
+  function modeBtns(){ document.getElementById('mWalk').setAttribute('aria-pressed', rtMode === 'walk'); document.getElementById('mDrive').setAttribute('aria-pressed', rtMode === 'drive'); }
+  const CAT_COL = { "D-Day bus to Zeray":"#C27C00","Event shuttle":"#C27C00","Public bus route":"#0F7C80","Traffic diversion":"#C8102E","Footpath":"#2E8540","Parking access road":"#2563C9","Contingency parking":"#2563C9" };
+  const CAT_TXT = { "D-Day bus to Zeray":"event bus road","Event shuttle":"shuttle road","Public bus route":"bus route road","Traffic diversion":"diversion road","Footpath":"footpath","Parking access road":"parking access road","Contingency parking":"parking road" };
+  function runRoute(){
+    document.getElementById('rtFrom').textContent = rtFrom ? rtFrom.label : 'Not set';
+    document.getElementById('rtTo').textContent = rtTo ? rtTo.label : 'Not set';
+    const out = document.getElementById('rtResult');
+    routeLayer.removeAll();
+    if (!rtFrom || !rtTo) { out.innerHTML = ''; return; }
+    if (!graph) { out.innerHTML = '<div class="warn">The route network is still loading. Try again in a moment.</div>'; return; }
+    const r = GMCRouter.route(graph, rtFrom.ll, rtTo.ll, rtMode);
+    const pt = (ll, color) => new Graphic({ geometry: { type: "point", longitude: ll[0], latitude: ll[1] },
+      symbol: { type: "simple-marker", size: 14, color, outline: { color: "#fff", width: 2.5 } } });
+    if (!r || !r.ok || r.startGap > 2500 || r.endGap > 2500) {
+      out.innerHTML = '<div class="warn">No connected route was found on the event roads and paths between these two places. Some areas, such as the east side across the river, are not linked in the plan. Follow signs and marshals, or use the Get directions link in a place\'s pop-up.</div>';
+      routeLayer.addMany([pt(rtFrom.ll, "#1A73E8"), pt(rtTo.ll, "#6E1E2B")]);
+      return;
+    }
+    const line = (paths, color, width, style) => new Graphic({ geometry: { type: "polyline", paths, spatialReference: { wkid: 4326 } },
+      symbol: { type: "simple-line", color, width, style, cap: "round", join: "round" } });
+    routeLayer.addMany([
+      line([r.coords], [255, 255, 255, 0.95], 9, "solid"),
+      line([r.coords], "#6E1E2B", 5, "solid"),
+      line([[rtFrom.ll, r.coords[0]]], "#56636A", 3, "short-dot"),
+      line([[r.coords[r.coords.length - 1], rtTo.ll]], "#56636A", 3, "short-dot"),
+      pt(rtFrom.ll, "#1A73E8"), pt(rtTo.ll, "#6E1E2B")
+    ]);
+    view.goTo(routeLayer.graphics.toArray().map(g => g.geometry)).catch(() => {});
+    const speed = rtMode === "walk" ? 80 : 333; // metres per minute
+    const mins = Math.max(1, Math.round(r.total / speed));
+    const km = (r.total / 1000).toFixed(1);
+    let h = `<div class="rt-sum"><strong>${mins} min</strong><span>${km} km · ${rtMode === 'walk' ? 'walking' : 'by vehicle'}</span></div>`;
+    r.steps.forEach((st, i) => {
+      const m = st.m < 1000 ? `${Math.round(st.m / 10) * 10} m` : `${(st.m / 1000).toFixed(1)} km`;
+      if (st.kind === 'walk') h += `<div class="step"><i style="background:#56636A">${i + 1}</i><div>${st.text}<small>${m}, off the mapped roads</small></div></div>`;
+      else h += `<div class="step"><i style="background:${CAT_COL[st.category] || '#555'}">${i + 1}</i><div>Follow the ${esc(CAT_TXT[st.category] || 'road')} <b>${esc(st.name)}</b><small>${m}</small></div></div>`;
+    });
+    h += `<div class="step"><i style="background:#6E1E2B">✓</i><div>Arrive at <b>${esc(rtTo.label)}</b></div></div>`;
+    h += `<p class="hint" style="margin-top:10px">Routes follow the event plan's mapped roads and paths only. Road closures and one-way systems on the day may differ; follow police and marshal instructions.</p>`;
+    h += `<button class="chip-btn" id="rtClear" style="margin-top:4px">Clear route</button>`;
+    out.innerHTML = h;
+    document.getElementById('rtClear').onclick = () => { rtFrom = rtTo = null; routeLayer.removeAll(); runRoute(); };
+  }
+  function toast(t){
+    let el = document.getElementById('toast');
+    if (!el) { el = document.createElement('div'); el.id = 'toast'; el.setAttribute('role', 'status');
+      el.style.cssText = 'position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 96px);transform:translateX(-50%);z-index:60;background:#1E2A2F;color:#fff;padding:10px 14px;border-radius:12px;font-size:13.5px;max-width:88vw;transition:opacity .25s';
+      document.body.appendChild(el); }
+    el.textContent = t; el.style.opacity = 1; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.opacity = 0, 3000);
+  }
+
+  /* ---------- Overview ---------- */
+  async function stat(lyr, where, type, field){
+    if (!lyr) return 0;
+    const q = lyr.createQuery();
+    q.where = where + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+    q.outStatistics = [{ statisticType: type, onStatisticField: field, outStatisticFieldName: "v" }];
+    try { const r = await lyr.queryFeatures(q); return r.features[0]?.attributes.v || 0; } catch (e) { console.error(e); return 0; }
+  }
+  async function loadOverview(){
+    const [park, lots, tents, tentSites, buses, stands] = await Promise.all([
+      stat(L.points, "category = 'Venue parking'", "sum", "cap_veh"),
+      stat(L.points, "category = 'Venue parking' AND cap_veh > 0", "count", "uid"),
+      stat(L.polygons, "category = 'Tented accommodation'", "sum", "cap_people"),
+      stat(L.polygons, "category = 'Tented accommodation'", "count", "uid"),
+      stat(L.lines, "category = 'D-Day bus to Zeray'", "count", "uid"),
+      stat(L.points, "category IN ('Taxi stand','Bus & taxi stand','Bus parking') AND event_day = '1 Nov (D-Day)'", "count", "uid")
+    ]);
+    const k = (n, t) => `<div class="kpi"><strong>${Number(n).toLocaleString()}</strong><span>${t}</span></div>`;
+    document.getElementById('kpis').innerHTML =
+      k(park, `vehicle spaces at ${lots} Zeray venue lots`) +
+      k(tents, `people can stay across ${tentSites} tented sites`) +
+      k(buses, `bus routes into Zeray on 1 Nov`) +
+      k(stands, `bus and taxi stands on 1 Nov`);
+    await bars(L.polygons, "category = 'Tented accommodation'", "cap_people", "tentBars", "#4E7D23");
+    await bars(L.points, "category = 'Venue parking' AND cap_veh > 0", "cap_veh", "lotBars", "#2563C9");
+  }
+  async function bars(lyr, where, field, el, color){
+    if (!lyr) return;
+    const q = lyr.createQuery();
+    q.where = where + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+    q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
+    let fs = [];
+    try { fs = (await lyr.queryFeatures(q)).features; } catch (e) { console.error(e); }
+    fs.sort((a, b) => (b.attributes[field] || 0) - (a.attributes[field] || 0));
+    const max = Math.max(1, ...fs.map(f => f.attributes[field] || 0));
+    const box = document.getElementById(el);
+    box.innerHTML = fs.map((f, i) => `<button class="bar-row" data-i="${i}"><span>${esc(f.attributes.name)}</span>
+      <span class="track"><span class="fill" style="display:block;background:${color};width:${Math.max(2, (f.attributes[field] || 0) / max * 100)}%"></span></span>
+      <b>${Number(f.attributes[field] || 0).toLocaleString()}</b></button>`).join('');
+    box.querySelectorAll('.bar-row').forEach(b => b.onclick = () => openFeature(fs[+b.dataset.i]));
+  }
+
+  /* ---------- sheet & tabs ---------- */
+  const sheet = document.getElementById('sheet');
+  function openSheet(o){ sheet.classList.toggle('open', o); }
+  window.openSheet = openSheet;
+  function setTab(t){
+    document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
+    ['near', 'route', 'layers', 'overview'].forEach(p => document.getElementById('pane-' + p).hidden = p !== t);
+  }
+  document.querySelectorAll('.tab').forEach(b => b.onclick = () => { setTab(b.dataset.tab); openSheet(true); });
+  document.getElementById('handle').onclick = () => openSheet(!sheet.classList.contains('open'));
+  view.on("click", () => { if (!picking && window.innerWidth < 900) openSheet(false); });
+});
+}
+</script>
+</body>
+</html>
