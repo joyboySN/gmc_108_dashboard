@@ -100,6 +100,23 @@ button{font:inherit;color:inherit;cursor:pointer}
 .step i{width:26px;height:26px;border-radius:50%;flex:none;display:grid;place-items:center;color:#fff;font-style:normal;font-size:12px;font-weight:700}
 .step small{display:block;color:var(--ink-soft);font-size:12.5px}
 .warn{background:#FFF6DE;border-radius:12px;padding:10px 12px;font-size:13px;line-height:1.45;margin-top:8px}
+.nav-top,.nav-bottom{display:none}
+body.navigating .top{display:none}
+body.navigating .nav-top{display:block;position:fixed;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 10px);z-index:40;background:#0F5C3A;color:#fff;border-radius:18px;padding:14px 16px;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+#navMain{font-family:var(--display);font-size:19px;font-weight:700;line-height:1.25}
+#navSub{font-size:13.5px;opacity:.9;margin-top:4px}
+body.navigating .nav-bottom{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--paper);padding:12px 14px calc(env(safe-area-inset-bottom,0px) + 12px);box-shadow:0 -6px 20px rgba(0,0,0,.15);align-items:center;gap:10px;flex-wrap:wrap}
+#navRemain{flex:1 1 160px;font-weight:700;font-size:14.5px}
+.nav-actions{display:flex;gap:8px}
+.nav-end{border:0;background:#C8102E;color:#fff;font-weight:700;border-radius:999px;padding:0 18px;min-height:42px}
+body.navigating .sheet:not(.open){transform:translateY(110%)}
+body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);height:min(62vh,560px)}
+body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(env(safe-area-inset-top,0px) + 96px)!important}
+.rt-actions{display:flex;gap:8px;margin:4px 0 10px}
+.rt-actions button{flex:1;height:46px;border-radius:14px;font-weight:700;font-size:14px}
+.rt-go{border:0;background:#0F5C3A;color:#fff}
+.rt-view{border:1px solid var(--line);background:var(--paper)}
+@media (min-width:900px){ body.navigating .nav-top{left:16px;right:auto;width:400px} body.navigating .nav-bottom{left:16px;right:auto;width:400px;bottom:16px;border-radius:18px} }
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -125,6 +142,19 @@ button{font:inherit;color:inherit;cursor:pointer}
     <p>Gelephu · parking, shuttles, stays and venue access</p>
   </div>
 </header>
+
+<div class="nav-top" id="navTop" role="status" aria-live="polite">
+  <div id="navMain">Starting navigation…</div>
+  <div id="navSub"></div>
+</div>
+<div class="nav-bottom" id="navBottom">
+  <div id="navRemain">Finding your location…</div>
+  <div class="nav-actions">
+    <button class="chip-btn" id="navRecenter" hidden>Re-centre</button>
+    <button class="chip-btn" id="navSteps">Steps</button>
+    <button class="nav-end" id="navEnd">End</button>
+  </div>
+</div>
 
 <section class="sheet" id="sheet" aria-label="Details panel">
   <button class="handle" id="handle" aria-label="Expand or collapse panel"><span></span></button>
@@ -284,13 +314,19 @@ const GMCRouter = (() => {
     let cur = null;
     for (let i = 1; i < seq.length; i++) {
       const info = pinfo[seq[i]], w = plen[seq[i]];
-      if (info.category === 'connector') { if (cur) cur.m += w; continue; }
-      if (cur && cur.name === info.name) cur.m += w;
-      else { cur = { kind: 'line', name: info.name, category: info.category, m: w }; steps.push(cur); }
+      if (info.category === 'connector') { if (cur) { cur.m += w; cur.i1 = i; } continue; }
+      if (cur && cur.name === info.name) { cur.m += w; cur.i1 = i; }
+      else { cur = { kind: 'line', name: info.name, category: info.category, m: w, i0: i - 1, i1: i }; steps.push(cur); }
     }
     if (partial) steps.push({ kind: 'gap', text: 'Continue to your destination. This last part is not on the mapped roads, so follow local roads and signs', m: t.dist });
     else if (t.dist > 15) steps.push({ kind: 'walk', text: 'Walk to your destination', m: t.dist });
-    const merged = steps.filter(x => x.m >= 20 || x.kind !== 'line');
+    // fold very short pieces into the previous line step so the list stays readable
+    const merged = [];
+    steps.forEach(x => {
+      const last = merged[merged.length - 1];
+      if (x.kind === 'line' && x.m < 20 && last && last.kind === 'line') { last.m += x.m; last.i1 = x.i1; }
+      else merged.push(x);
+    });
     return { ok: true, partial, coords, steps: merged, total: netLen + s.dist + t.dist, network: netLen, startGap: s.dist, endGap: t.dist,
              fromLL: from, toLL: to };
   }
@@ -568,6 +604,7 @@ require([
     document.getElementById('rtTo').textContent = rtTo ? rtTo.label : 'Not set';
     const out = document.getElementById('rtResult');
     routeLayer.removeAll();
+    lastRoute = null;
     if (!rtFrom || !rtTo) { out.innerHTML = ''; return; }
     if (!graph) { out.innerHTML = '<div class="warn">The route network is still loading. Try again in a moment.</div>'; return; }
     const r = GMCRouter.route(graph, rtFrom.ll, rtTo.ll, rtMode);
@@ -587,12 +624,14 @@ require([
       line([[r.coords[r.coords.length - 1], rtTo.ll]], "#56636A", 3, "short-dot"),
       pt(rtFrom.ll, "#1A73E8"), pt(rtTo.ll, "#6E1E2B")
     ]);
-    view.goTo(routeLayer.graphics.toArray().map(g => g.geometry)).catch(() => {});
+    if (!nav) view.goTo(routeLayer.graphics.toArray().map(g => g.geometry)).catch(() => {});
     const speed = rtMode === "walk" ? 80 : 333; // metres per minute
     const partialNote = r.partial ? `<div class="warn" style="margin:0 0 8px">The mapped event roads don't reach this place. The route takes you to the closest point they do reach; the rest is shown as a dotted line.</div>` : '';
     const mins = Math.max(1, Math.round(r.total / speed));
     const km = (r.total / 1000).toFixed(1);
+    lastRoute = prepRoute(r);
     let h = partialNote + `<div class="rt-sum"><strong>${r.partial ? 'About ' : ''}${mins} min</strong><span>${km} km · ${rtMode === 'walk' ? 'walking' : 'by vehicle'}</span></div>`;
+    h += `<div class="rt-actions"><button class="rt-view" id="rtViewMap">View on map</button><button class="rt-go" id="rtStart">Start navigation</button></div>`;
     r.steps.forEach((st, i) => {
       const m = st.m < 1000 ? `${Math.round(st.m / 10) * 10} m` : `${(st.m / 1000).toFixed(1)} km`;
       if (st.kind === 'walk') h += `<div class="step"><i style="background:#56636A">${i + 1}</i><div>${st.text}<small>${m}, off the mapped roads</small></div></div>`;
@@ -603,7 +642,9 @@ require([
     h += `<p class="hint" style="margin-top:10px">Routes follow the event plan's mapped roads and paths only. Road closures and one-way systems on the day may differ; follow police and marshal instructions.</p>`;
     h += `<button class="chip-btn" id="rtClear" style="margin-top:4px">Clear route</button>`;
     out.innerHTML = h;
-    document.getElementById('rtClear').onclick = () => { rtFrom = rtTo = null; routeLayer.removeAll(); runRoute(); };
+    document.getElementById('rtClear').onclick = () => { stopNav(); rtFrom = rtTo = null; lastRoute = null; routeLayer.removeAll(); runRoute(); };
+    document.getElementById('rtViewMap').onclick = viewOnMap;
+    document.getElementById('rtStart').onclick = startNav;
   }
   function toast(t){
     let el = document.getElementById('toast');
@@ -612,6 +653,119 @@ require([
       document.body.appendChild(el); }
     el.textContent = t; el.style.opacity = 1; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.opacity = 0, 3000);
   }
+
+  /* ---------- View on map & live navigation ---------- */
+  let lastRoute = null, nav = null;
+  const R_EARTH = 6371000, RAD = Math.PI / 180;
+  const KX = Math.cos(26.88 * RAD) * R_EARTH * RAD, KY = R_EARTH * RAD;
+  const xy = ll => [ll[0] * KX, ll[1] * KY];
+  function prepRoute(r){
+    const pts = r.coords.map(xy), cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    r._pts = pts; r._cum = cum; return r;
+  }
+  function locateOnRoute(r, ll){
+    const p = xy(ll); let best = { d: Infinity, along: 0 };
+    for (let i = 1; i < r._pts.length; i++) {
+      const a = r._pts[i - 1], b = r._pts[i], dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+      let t = L2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+      if (d < best.d) best = { d, along: r._cum[i - 1] + t * Math.sqrt(L2), seg: i };
+    }
+    if (r._pts.length === 1) best = { d: Math.hypot(p[0] - r._pts[0][0], p[1] - r._pts[0][1]), along: 0 };
+    return best;
+  }
+  const fmtM = m => m < 1000 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1)} km`;
+  const stepText = st => st.kind === 'line' ? `Follow the ${CAT_TXT[st.category] || 'road'} ${st.name}` : st.text.split('.')[0];
+
+  function viewOnMap(){
+    if (!routeLayer.graphics.length) return;
+    if (window.innerWidth < 900) openSheet(false);
+    view.goTo(routeLayer.graphics.toArray().map(g => g.geometry), { duration: 600 }).catch(() => {});
+    toast('Tap the Route tab to see the steps again');
+  }
+
+  function startNav(){
+    if (!navigator.geolocation) { toast('This browser cannot share your location.'); return; }
+    if (!rtTo) { toast('Choose a destination first'); return; }
+    toast('Starting navigation…');
+    nav = { watch: null, follow: true, off: 0, wake: null, started: false };
+    if ('wakeLock' in navigator) navigator.wakeLock.request('screen').then(w => { if (nav) nav.wake = w; }).catch(() => {});
+    nav.watch = navigator.geolocation.watchPosition(onNavPos, () => { toast('Location is off. Allow location access to navigate.'); stopNav(); },
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
+  }
+  function enterNavUI(){
+    document.body.classList.add('navigating');
+    openSheet(false);
+  }
+  function stopNav(){
+    if (!nav) return;
+    if (nav.watch !== null) navigator.geolocation.clearWatch(nav.watch);
+    if (nav.wake) nav.wake.release().catch(() => {});
+    nav = null;
+    document.body.classList.remove('navigating');
+    if (meGraphic) { navLayer.remove(meGraphic); meGraphic = null; }
+  }
+  const navLayer = new GraphicsLayer({ title: "You", listMode: "hide" });
+  webmap.add(navLayer);
+  let meGraphic = null;
+  function onNavPos(pos){
+    if (!nav) return;
+    const ll = [pos.coords.longitude, pos.coords.latitude];
+    me = [ll[1], ll[0]];
+    // position marker
+    const geom = { type: "point", longitude: ll[0], latitude: ll[1] };
+    if (!meGraphic) {
+      meGraphic = new Graphic({ geometry: geom, symbol: { type: "simple-marker", size: 18, color: "#1A73E8", outline: { color: "#fff", width: 3 } } });
+      navLayer.add(meGraphic);
+    } else meGraphic.geometry = geom;
+    // first fix: route from here
+    if (!nav.started) {
+      nav.started = true;
+      rtFrom = { ll, label: "My location" };
+      runRoute();
+      if (!lastRoute) { toast('No route could be found from your location.'); stopNav(); return; }
+      enterNavUI();
+      view.goTo({ center: ll, zoom: 17 }, { duration: 600 }).catch(() => {});
+    }
+    const r = lastRoute; if (!r) return;
+    const at = locateOnRoute(r, ll);
+    const toDest = dist([ll[1], ll[0]], [rtTo.ll[1], rtTo.ll[0]]);
+    // arrived
+    if (toDest < 35) { setBanner('You have arrived', esc(rtTo.label), ''); document.getElementById('navRemain').textContent = 'Arrived'; setTimeout(stopNav, 6000); nav.follow = false; return; }
+    // off route: reroute after two readings more than 60 m away (only while still on the mapped part)
+    const onWalkIn = at.along < 1 && r.startGap > 60;
+    if (!onWalkIn && at.d > 60 && !(r.partial && at.along >= r.network - 5)) {
+      nav.off++;
+      if (nav.off >= 2) { nav.off = 0; toast('Off route. Finding a new route…'); rtFrom = { ll, label: "My location" }; runRoute(); return; }
+    } else nav.off = 0;
+    // current step
+    const lineSteps = r.steps.filter(s => s.kind === 'line');
+    let html, sub;
+    if (onWalkIn && at.d > 25) { html = 'Walk to the start of the route'; sub = fmtM(at.d); }
+    else {
+      const st = lineSteps.find(s => r._cum[s.i1] > at.along + 5);
+      if (st) {
+        const left = r._cum[st.i1] - at.along;
+        const next = lineSteps[lineSteps.indexOf(st) + 1];
+        html = esc(stepText(st)); sub = `${fmtM(left)}` + (next ? ` · then ${esc(stepText(next))}` : (r.partial ? ' · then continue off the mapped roads' : ' · then arrive'));
+      } else if (r.partial) { html = 'Continue to your destination'; sub = `${fmtM(toDest)} in a straight line · follow local roads and signs`; }
+      else { html = 'Walk to your destination'; sub = fmtM(toDest); }
+    }
+    setBanner(html, sub);
+    const remaining = Math.max(0, r.network - at.along) + (r.endGap || 0) + (onWalkIn ? at.d : 0);
+    const speed = rtMode === "walk" ? 80 : 333;
+    document.getElementById('navRemain').textContent = `${Math.max(1, Math.round(remaining / speed))} min · ${fmtM(remaining)} to ${rtTo.label}`;
+    if (nav.follow) view.goTo({ center: ll }, { duration: 500 }).catch(() => {});
+  }
+  function setBanner(main, sub){
+    document.getElementById('navMain').innerHTML = main;
+    document.getElementById('navSub').innerHTML = sub || '';
+  }
+  view.on("drag", () => { if (nav) { nav.follow = false; document.getElementById('navRecenter').hidden = false; } });
+  document.getElementById('navRecenter').onclick = () => { if (!nav) return; nav.follow = true; document.getElementById('navRecenter').hidden = true; if (me) view.goTo({ center: [me[1], me[0]], zoom: 17 }).catch(() => {}); };
+  document.getElementById('navEnd').onclick = () => { stopNav(); setTab('route'); openSheet(true); };
+  document.getElementById('navSteps').onclick = () => { openSheet(true); setTab('route'); };
 
   /* ---------- Overview ---------- */
   async function stat(lyr, where, type, field){
