@@ -123,6 +123,14 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
 .esri-popup{font-size:13.5px}
 @media (min-width:900px){ .esri-popup__main-container{width:300px!important} }
 
+.tg{display:flex;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid #EEF0EC}
+.tg label{flex:1;font-size:14.5px;font-weight:500;cursor:pointer}
+.tg .badge{width:30px;height:30px;border-radius:9px;font-size:11px}
+.switch{appearance:none;-webkit-appearance:none;width:46px;height:28px;border-radius:14px;background:#CDD2CA;position:relative;flex:none;cursor:pointer;transition:background .2s;margin:0}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.switch:checked{background:#0F7C80}
+.switch:checked::after{transform:translateX(18px)}
+.tg-all{display:flex;gap:8px;margin:2px 0 6px}
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -197,7 +205,9 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
     <div id="rtResult"></div>
   </div>
   <div class="pane" id="pane-layers" hidden>
-    <h2>Map Legend</h2>
+    <h2>Show on map</h2>
+    <div id="toggles"></div>
+    <h2 style="margin-top:18px">Map Legend</h2>
     <div id="legend"></div>
   </div>
   <div class="pane" id="pane-overview" hidden>
@@ -422,6 +432,8 @@ require([
     if (CFG.PUBLIC_ONLY) feats.forEach(l => {
       l.definitionExpression = l.definitionExpression ? `(${l.definitionExpression}) AND audience = 'Public'` : "audience = 'Public'";
     });
+    feats.forEach(l => BASE.set(l, l.definitionExpression || ""));
+    buildToggles();
     Promise.all(webmap.allLayers.filter(l => l.type === "feature").toArray().map(l => l.load().catch(() => null))).then(setupSearch);
     drawRestricted();
     setupRouteAction();
@@ -458,6 +470,63 @@ require([
   const fmtD = m => m < 1000 ? `${Math.round(m/10)*10} m` : `${(m/1000).toFixed(1)} km`;
   const travel = m => m < 2500 ? `${Math.max(1, Math.round(m/80))} min walk` : `${Math.max(1, Math.round(m/400))} min drive`;
   const inList = arr => arr.map(v => `'${v.replace(/'/g, "''")}'`).join(",");
+
+  /* ---------- Show on map: friendly on/off switches ---------- */
+  const BASE = new Map();
+  const baseExpr = l => (l && BASE.has(l)) ? BASE.get(l) : ((l && l.definitionExpression) || "");
+  const TOGGLES = [
+    { id: "parking", label: "Parking", c: "#2563C9", g: "P", cats: { points: ["Venue parking", "Event parking"], polygons: ["Event parking", "East side parking"] } },
+    { id: "transit", label: "Buses, taxis and shuttles", c: "#0F7C80", g: "B", cats: { points: ["Taxi stand", "Bus & taxi stand", "Bus parking"], polygons: ["Shuttle pick-up", "Bus & taxi depot"], lines: ["D-Day bus to Zeray", "Public bus route", "Event shuttle"] } },
+    { id: "roads", label: "Diversions and access roads", c: "#C8102E", g: "!", cats: { lines: ["Traffic diversion", "Parking access road", "Contingency parking", "Service road"] } },
+    { id: "walk", label: "Footpaths", c: "#2E8540", g: "⋯", cats: { lines: ["Footpath"] } },
+    { id: "toilets", label: "Toilets and amenities", c: "#00838F", g: "WC", cats: { points: ["Toilet", "Smoking area"] } },
+    { id: "food", label: "Food stalls", c: "#2E8B57", g: "F", layer: "food" },
+    { id: "stay", label: "Tented stays and campsite", c: "#6A3D9A", g: "▲", cats: { polygons: ["Tented accommodation", "Campsite"] } },
+    { id: "sacred", label: "Sacred sites", c: "#1F4E79", g: "☸", cats: { polygons: ["Sacred site"] } },
+    { id: "chorten", label: "108 Chortens", c: "#B8860B", g: "☸", layerTitle: "chorten" },
+    { id: "venue", label: "Zeray venue", c: "#D7301F", g: "★", cats: { polygons: ["Venue structure"] } },
+    { id: "town", label: "Town blocks", c: "#8C6D12", g: "▢", cats: { polygons: ["Town block"] } },
+    { id: "restricted", label: "Restricted areas (red)", c: "#C8102E", g: "R", overlay: true }
+  ];
+  const tgState = {};
+  function applyToggles(){
+    // category filters on the shared layers
+    ["points", "polygons", "lines"].forEach(k => {
+      const lyr = L[k]; if (!lyr) return;
+      const hidden = [];
+      TOGGLES.forEach(t => { if (t.cats && t.cats[k] && tgState[t.id] === false) hidden.push(...t.cats[k]); });
+      const base = baseExpr(lyr);
+      const parts = [];
+      if (base) parts.push(`(${base})`);
+      if (hidden.length) parts.push(`category NOT IN (${inList(hidden)})`);
+      lyr.definitionExpression = parts.join(" AND ") || null;
+    });
+    // whole layers
+    TOGGLES.forEach(t => {
+      let lyr = null;
+      if (t.layer) lyr = L[t.layer];
+      if (t.layerTitle) lyr = webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle));
+      if (t.overlay) lyr = restrictedLayer;
+      if (lyr) lyr.visible = tgState[t.id] !== false;
+    });
+  }
+  function buildToggles(){
+    const box = document.getElementById('toggles'); if (!box) return;
+    const available = TOGGLES.filter(t => {
+      if (t.layer) return !!L[t.layer];
+      if (t.layerTitle) return !!webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle));
+      return true;
+    });
+    available.forEach(t => { if (!(t.id in tgState)) tgState[t.id] = true; });
+    box.innerHTML = `<div class="tg-all"><button class="chip-btn" id="tgAllOn">Show all</button><button class="chip-btn" id="tgAllOff">Hide all</button></div>` +
+      available.map(t => `<div class="tg"><span class="badge" style="background:${t.c}">${t.g}</span>
+        <label for="tg-${t.id}">${t.label}</label>
+        <input class="switch" type="checkbox" id="tg-${t.id}" data-id="${t.id}" ${tgState[t.id] ? 'checked' : ''}></div>`).join('');
+    box.querySelectorAll('.switch').forEach(sw => sw.onchange = () => { tgState[sw.dataset.id] = sw.checked; applyToggles(); });
+    const all = on => { available.forEach(t => tgState[t.id] = on); box.querySelectorAll('.switch').forEach(sw => sw.checked = on); applyToggles(); };
+    document.getElementById('tgAllOn').onclick = () => all(true);
+    document.getElementById('tgAllOff').onclick = () => all(false);
+  }
 
   /* make features from layers with other field names look the same to the app */
   const hasField = (lyr, n) => !!(lyr && lyr.fields && lyr.fields.some(f => f.name.toLowerCase() === n));
@@ -501,7 +570,7 @@ require([
       const key = g.title;
       if (!nearCache[key]) {
         const q = lyr.createQuery();
-        q.where = (hasField(lyr, "category") ? `category IN (${inList(g.cats)})` : "1=1") + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+        q.where = (hasField(lyr, "category") ? `category IN (${inList(g.cats)})` : "1=1") + (baseExpr(lyr) ? ` AND (${baseExpr(lyr)})` : '');
         q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
         try { nearCache[key] = (await lyr.queryFeatures(q)).features.map(f => normAttrs(f, lyr)); } catch (e) { console.error(e); nearCache[key] = []; }
       }
@@ -874,7 +943,7 @@ require([
   async function stat(lyr, where, type, field){
     if (!lyr) return 0;
     const q = lyr.createQuery();
-    q.where = where + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+    q.where = where + (baseExpr(lyr) ? ` AND (${baseExpr(lyr)})` : '');
     q.outStatistics = [{ statisticType: type, onStatisticField: field, outStatisticFieldName: "v" }];
     try { const r = await lyr.queryFeatures(q); return r.features[0]?.attributes.v || 0; } catch (e) { console.error(e); return 0; }
   }
@@ -899,7 +968,7 @@ require([
   async function bars(lyr, where, field, el, color){
     if (!lyr) return;
     const q = lyr.createQuery();
-    q.where = where + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+    q.where = where + (baseExpr(lyr) ? ` AND (${baseExpr(lyr)})` : '');
     q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
     let fs = [];
     try { fs = (await lyr.queryFeatures(q)).features; } catch (e) { console.error(e); }
