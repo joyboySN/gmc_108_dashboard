@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#6E1E2B">
 <title>GMC 108 Event Map</title>
-
+<meta name="app-version" content="v20">
 <!--
   ============================================================
   SETUP: paste your web map's item ID below (the code after "id="
@@ -119,15 +119,10 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
 .rlist .row b{font-size:14px}
 .esri-search{width:min(240px, calc(100vw - 110px))}
 /* standard ArcGIS pop-up, made smaller */
-.esri-popup__main-container{max-height:40vh!important}
+.esri-popup__main-container{max-height:var(--popup-max, 40vh)!important}
 .esri-popup{font-size:13.5px}
 @media (min-width:900px){ .esri-popup__main-container{width:300px!important} }
-@media (max-width:899px){
-  .top{transition:transform .25s}
-  body.popup-open .top{transform:translateY(-140%)}
-  /* while a pop-up is open on a phone, the bottom panel slides away so the pop-up is fully visible */
-  body.popup-open .sheet{transform:translateY(110%)!important}
-}
+
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -383,6 +378,12 @@ require([
     view.popup.autoCloseEnabled = false;
     reactiveUtils.watch(() => view.popup.visible, vis => {
       document.body.classList.toggle('popup-open', !!vis && isPhone());
+      if (vis && isPhone()) {
+        // header and bottom panel stay in place; the pop-up fits in the space between them
+        openSheet(false);
+        const free = window.innerHeight - headerBottom() - 150 - 16;
+        document.documentElement.style.setProperty('--popup-max', Math.max(160, free) + 'px');
+      }
     });
   });
   function showPlace(f, location){
