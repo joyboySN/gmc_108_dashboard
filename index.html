@@ -161,12 +161,12 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="near" aria-selected="true">Nearby</button>
     <button class="tab" role="tab" data-tab="route" aria-selected="false">Route</button>
-    <button class="tab" role="tab" data-tab="layers" aria-selected="false">Layers</button>
+    <button class="tab" role="tab" data-tab="layers" aria-selected="false">Map key</button>
     <button class="tab" role="tab" data-tab="overview" aria-selected="false">Overview</button>
   </div>
   <div class="pane" id="pane-near">
     <h2 id="nearTitle">Closest to you</h2>
-    <p class="hint" id="nearHint">Find the closest parking, bus and taxi stands, toilets and tented stays. Your location stays on your phone.</p>
+    <p class="hint" id="nearHint">Find the closest parking, bus and taxi stands, toilets, food stalls and tented stays. Your location stays on your phone.</p>
     <button class="cta" id="useLoc">Use my location</button>
     <div id="nearList"></div>
   </div>
@@ -181,6 +181,7 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
       <button class="chip-btn" data-near="parking">Nearest parking</button>
       <button class="chip-btn" data-near="stand">Nearest bus or taxi</button>
       <button class="chip-btn" data-near="toilet">Nearest toilet</button>
+      <button class="chip-btn" data-near="food">Nearest food stall</button>
       <button class="chip-btn" data-near="stay">Nearest tented stay</button>
       <button class="chip-btn" id="rtToMap">Tap on the map</button>
     </div>
@@ -193,9 +194,7 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
     <div id="rtResult"></div>
   </div>
   <div class="pane" id="pane-layers" hidden>
-    <h2>Show on map</h2>
-    <div id="layerList"></div>
-    <h2 style="margin-top:16px">Map key</h2>
+    <h2>Map key</h2>
     <div id="legend"></div>
   </div>
   <div class="pane" id="pane-overview" hidden>
@@ -402,7 +401,7 @@ require([
   view.ui.add(search, "top-left");
   search.on("select-result", () => { if (isPhone()) openSheet(false); });
 
-  let L = { points: null, lines: null, polygons: null };
+  let L = { points: null, lines: null, polygons: null, food: null };
   let me = null;
 
   webmap.load().then(() => {
@@ -412,7 +411,10 @@ require([
       .then(() => { home.viewpoint = view.viewpoint.clone(); }));
     const feats = webmap.allLayers.filter(l => l.type === "feature");
     const find = word => feats.find(l => l.title.toLowerCase().includes(word));
-    L.points = find("point"); L.lines = find("line"); L.polygons = find("polygon");
+    L.food = find("food");
+    L.points = feats.find(l => l !== L.food && l.title.toLowerCase().includes("point"));
+    L.lines = feats.find(l => l !== L.food && l.title.toLowerCase().includes("line"));
+    L.polygons = feats.find(l => l !== L.food && l.title.toLowerCase().includes("polygon"));
     if (!L.points || !L.polygons) {
       showMsg('Layers not found', 'The web map needs layers whose titles contain "Points", "Lines" and "Polygons".');
       return;
@@ -425,7 +427,6 @@ require([
     setupRouteAction();
     buildNetwork();
     loadPlaces();
-    new LayerList({ view, container: "layerList" });
     new Legend({ view, container: "legend" });
     loadOverview();
     renderNear();
@@ -446,9 +447,9 @@ require([
   const COLORS = {
     "Venue parking":"#2563C9","Event parking":"#2563C9","East side parking":"#2563C9",
     "Taxi stand":"#7B4FB5","Bus & taxi stand":"#0F7C80","Bus parking":"#0F7C80",
-    "Toilet":"#00838F","Tented accommodation":"#6A3D9A","Campsite":"#333333"
+    "Toilet":"#00838F","Tented accommodation":"#6A3D9A","Campsite":"#333333","Food stall":"#2E8B57"
   };
-  const GLYPH = {"Taxi stand":"T","Bus & taxi stand":"B","Bus parking":"B","Toilet":"WC","Tented accommodation":"▲","Campsite":"▲"};
+  const GLYPH = {"Taxi stand":"T","Bus & taxi stand":"B","Bus parking":"B","Toilet":"WC","Tented accommodation":"▲","Campsite":"▲","Food stall":"F"};
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   function dist(a, b){
     const R=6371000, r=Math.PI/180, dLa=(b[0]-a[0])*r, dLo=(b[1]-a[1])*r;
@@ -458,12 +459,34 @@ require([
   const travel = m => m < 2500 ? `${Math.max(1, Math.round(m/80))} min walk` : `${Math.max(1, Math.round(m/400))} min drive`;
   const inList = arr => arr.map(v => `'${v.replace(/'/g, "''")}'`).join(",");
 
+  /* make features from layers with other field names look the same to the app */
+  const hasField = (lyr, n) => !!(lyr && lyr.fields && lyr.fields.some(f => f.name.toLowerCase() === n));
+  function normAttrs(f, lyr){
+    const a = f.attributes || {};
+    const get = n => { const k = Object.keys(a).find(x => x.toLowerCase() === n); return k ? a[k] : undefined; };
+    if (lyr === L.food) {
+      if (!a.category) a.category = "Food stall";
+      if (!a.location && get("location")) a.location = get("location");
+      if (!a.stall_type && get("remarks")) a.stall_type = String(get("remarks")).replace("Stall", "stall");
+      if (!a.name) {
+        const sn = get("stall_numb") || get("stall_no") || "";
+        a.name = sn ? "Food stall " + String(sn).replace(/\D/g, "") : "Food stall";
+      }
+    }
+    if ((!a.lat || !a.lon) && f.geometry) {
+      const g = f.geometry.type === "point" ? f.geometry : (f.geometry.centroid || f.geometry.extent.center);
+      if (g) { a.lat = g.latitude; a.lon = g.longitude; }
+    }
+    return f;
+  }
+
   /* ---------- Nearby ---------- */
   const GROUPS = [
     { title: "Parking", layer: "points", cats: ["Venue parking", "Event parking"] },
     { title: "Parking areas", layer: "polygons", cats: ["Event parking", "East side parking"] },
     { title: "Bus & taxi stands", layer: "points", cats: ["Taxi stand", "Bus & taxi stand", "Bus parking"] },
     { title: "Toilets", layer: "points", cats: ["Toilet"] },
+    { title: "Food stalls", layer: "food", cats: ["Food stall"] },
     { title: "Tented stays", layer: "polygons", cats: ["Tented accommodation", "Campsite"] }
   ];
   const nearCache = {};
@@ -478,9 +501,9 @@ require([
       const key = g.title;
       if (!nearCache[key]) {
         const q = lyr.createQuery();
-        q.where = `category IN (${inList(g.cats)})` + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
+        q.where = (hasField(lyr, "category") ? `category IN (${inList(g.cats)})` : "1=1") + (lyr.definitionExpression ? ` AND (${lyr.definitionExpression})` : '');
         q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
-        try { nearCache[key] = (await lyr.queryFeatures(q)).features; } catch (e) { console.error(e); nearCache[key] = []; }
+        try { nearCache[key] = (await lyr.queryFeatures(q)).features.map(f => normAttrs(f, lyr)); } catch (e) { console.error(e); nearCache[key] = []; }
       }
       const seen = new Set();
       const items = nearCache[key]
@@ -495,7 +518,7 @@ require([
         const a = x.f.attributes;
         const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
         const title = stand && a.descr ? a.descr : a.name;
-        let sub = a.category;
+        let sub = a.category === "Food stall" && a.location ? `${a.location}${a.stall_type ? ' · ' + a.stall_type : ''}` : a.category;
         if (a.cap_veh > 0) sub += ` · ${a.cap_veh} vehicles`;
         if (a.cap_people > 0) sub += ` · ${Number(a.cap_people).toLocaleString()} people`;
         const rTag = a.audience === "Coordinators" ? ' <span class="rtag">Restricted</span>' : '';
@@ -555,12 +578,12 @@ require([
     const src = (layer, name) => {
       if (!layer) return null;
       const have = f => !layer.fields || layer.fields.some(x => x.name.toLowerCase() === f);
-      const fields = ["name", "descr", "location", "category"].filter(have);
+      const fields = ["name", "descr", "location", "category", "stall_numb", "remarks"].filter(have);
       if (!fields.length) return null;
       const s = {
         layer, name, placeholder: "Search " + name.toLowerCase(),
-        searchFields: fields, displayField: have("name") ? "name" : fields[0],
-        suggestionTemplate: have("category") ? "{name} · {category}" : "{name}", exactMatch: false, outFields: ["*"],
+        searchFields: fields, displayField: have("name") ? "name" : (have("stall_numb") ? "Stall_Numb" : fields[0]),
+        suggestionTemplate: have("name") ? (have("category") ? "{name} · {category}" : "{name}") : (have("stall_numb") ? "Food stall {Stall_Numb} · {Location}" : "{" + fields[0] + "}"), exactMatch: false, outFields: ["*"],
         maxSuggestions: 5, minSuggestCharacters: 2, zoomScale: 5000
       };
       if (have("audience") && pub !== "1=1") s.filter = { where: pub };
@@ -635,23 +658,24 @@ require([
     { key: "parking", title: "Parking", cats: ["Venue parking", "Event parking", "East side parking"] },
     { key: "stand", title: "Bus and taxi", cats: ["Taxi stand", "Bus & taxi stand", "Bus parking", "Shuttle pick-up", "Bus & taxi depot"] },
     { key: "toilet", title: "Toilets and amenities", cats: ["Toilet", "Smoking area"] },
+    { key: "food", title: "Food stalls", cats: ["Food stall"] },
     { key: "stay", title: "Tented stays", cats: ["Tented accommodation", "Campsite"] },
     { key: "sacred", title: "Sacred sites", cats: ["Sacred site"] }
   ];
   let places = [];
   async function loadPlaces(){
     const all = [];
-    for (const lyr of [L.points, L.polygons]) {
+    for (const lyr of [L.points, L.polygons, L.food]) {
       if (!lyr) continue;
       const q = lyr.createQuery();
-      q.where = (CFG.PUBLIC_ONLY ? "audience = 'Public'" : "1=1");
-      q.outFields = ["name", "descr", "category", "lat", "lon", "audience"]; q.returnGeometry = false;
-      try { (await lyr.queryFeatures(q)).features.forEach(f => all.push(f.attributes)); } catch (e) { console.error(e); }
+      q.where = (CFG.PUBLIC_ONLY && lyr.fields.some(f => f.name === "audience") ? "audience = 'Public'" : "1=1");
+      q.outFields = ["*"]; q.returnGeometry = !hasField(lyr, "lat"); q.outSpatialReference = { wkid: 4326 };
+      try { (await lyr.queryFeatures(q)).features.forEach(f => all.push(normAttrs(f, lyr).attributes)); } catch (e) { console.error(e); }
     }
     const seen = new Set();
     places = all.filter(a => a.lat && a.lon).map(a => {
       const stand = ["Taxi stand", "Bus & taxi stand", "Bus parking"].includes(a.category);
-      const label = stand && a.descr ? a.descr : a.name;
+      const label = stand && a.descr ? a.descr : (a.category === "Food stall" && a.location ? `${a.name} – ${a.location}` : a.name);
       const grp = PLACE_GROUPS.find(g => g.cats.includes(a.category));
       const restricted = a.audience === "Coordinators";
       return { label: restricted ? label + " (restricted)" : label, cat: a.category, grp: grp ? grp.key : null, ll: [a.lon, a.lat], restricted };
