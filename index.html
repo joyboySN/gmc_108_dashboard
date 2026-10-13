@@ -120,6 +120,8 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
 @media (min-width:900px){ body.navigating .nav-top{left:16px;right:auto;width:400px} body.navigating .nav-bottom{left:16px;right:auto;width:400px;bottom:16px;border-radius:18px} }
 .rtag{display:inline-block;background:#FDE8EA;color:#B00D23;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
 .rlist .row b{font-size:14px}
+.esri-popup--is-docked-bottom-center .esri-popup__main-container{max-height:48vh!important}
+@media (max-width:899px){ body.popup-open .sheet{transform:translateY(110%)!important} body.popup-open .esri-ui-bottom-right,body.popup-open .esri-ui-bottom-left{bottom:52vh!important} }
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -357,16 +359,45 @@ require([
   const webmap = new WebMap({ portalItem: { id: CFG.WEBMAP_ID } });
   const view = new MapView({
     container: "view", map: webmap,
-    popup: { dockEnabled: true, dockOptions: { buttonEnabled: false, breakpoint: { width: 900 }, position: "top-center" } }
+    popup: { dockEnabled: window.innerWidth < 900, collapseEnabled: false,
+      dockOptions: { buttonEnabled: false, breakpoint: false, position: "bottom-center" } }
   });
   view.ui.move("zoom", "top-right");
+
+  /* keep the map, pop-ups and zooming clear of the header and the panel */
+  const isPhone = () => window.innerWidth < 900;
+  function headerBottom(){
+    const el = document.body.classList.contains('navigating') ? document.getElementById('navTop') : document.querySelector('.top .bar');
+    return el ? Math.round(el.getBoundingClientRect().bottom) + 8 : 100;
+  }
+  function applyPadding(){
+    if (isPhone()) {
+      const popupOpen = document.body.classList.contains('popup-open');
+      view.padding = { top: headerBottom(), left: 0, right: 0, bottom: popupOpen ? Math.round(window.innerHeight * 0.5) : 150 };
+    } else {
+      view.padding = { top: 0, left: 430, right: 0, bottom: 0 };
+    }
+    if (view.popup) view.popup.dockEnabled = isPhone();
+  }
+  window.addEventListener('resize', applyPadding);
+  view.when(() => {
+    applyPadding();
+    reactiveUtils.watch(() => view.popup && view.popup.visible, vis => {
+      document.body.classList.toggle('popup-open', !!vis && isPhone());
+      applyPadding();
+      if (vis && isPhone()) {
+        const target = view.popup.location || (view.popup.selectedFeature && view.popup.selectedFeature.geometry);
+        if (target) view.goTo({ target, zoom: Math.max(view.zoom, 15) }, { duration: 400 }).catch(() => {});
+      }
+    });
+  });
 
   const locate = new Locate({ view, useHeadingEnabled: false, goToOverride: (v, o) => { o.target.scale = 8000; return v.goTo(o.target); } });
   view.ui.add(locate, "top-right");
   const home = new Home({ view });
   view.ui.add(home, "top-right");
-  const search = new Search({ view, popupEnabled: true, includeDefaultSources: true,
-    allPlaceholder: "Search event places or addresses", maxSuggestions: 8 });
+  const search = new Search({ view, popupEnabled: true, includeDefaultSources: false,
+    allPlaceholder: "Search event places", maxSuggestions: 8 });
   view.ui.add(search, "top-left");
 
   let L = { points: null, lines: null, polygons: null };
@@ -387,7 +418,7 @@ require([
     if (CFG.PUBLIC_ONLY) feats.forEach(l => {
       l.definitionExpression = l.definitionExpression ? `(${l.definitionExpression}) AND audience = 'Public'` : "audience = 'Public'";
     });
-    setupSearch();
+    Promise.all(webmap.allLayers.filter(l => l.type === "feature").toArray().map(l => l.load().catch(() => null))).then(setupSearch);
     drawRestricted();
     setupRouteAction();
     buildNetwork();
@@ -519,16 +550,25 @@ require([
   /* ---------- Search: event data + addresses ---------- */
   function setupSearch(){
     const pub = CFG.PUBLIC_ONLY ? "audience = 'Public'" : "1=1";
-    const src = (layer, name) => layer && ({
-      layer, name, placeholder: "Search " + name.toLowerCase(),
-      searchFields: ["name", "descr", "location", "category"], displayField: "name",
-      suggestionTemplate: "{name} · {category}", exactMatch: false, outFields: ["*"],
-      maxSuggestions: 5, minSuggestCharacters: 2, filter: { where: pub }, zoomScale: 5000
-    });
-    search.sources = [src(L.points, "Event points"), src(L.polygons, "Event areas"), src(L.lines, "Event routes")].filter(Boolean);
-    search.when(() => {
-      search.defaultSources.forEach(ds => { ds.countryCode = "BTN"; ds.name = "Addresses and places"; ds.placeholder = "Search addresses and places"; });
-    });
+    const src = (layer, name) => {
+      if (!layer) return null;
+      const have = f => !layer.fields || layer.fields.some(x => x.name.toLowerCase() === f);
+      const fields = ["name", "descr", "location", "category"].filter(have);
+      if (!fields.length) return null;
+      const s = {
+        layer, name, placeholder: "Search " + name.toLowerCase(),
+        searchFields: fields, displayField: have("name") ? "name" : fields[0],
+        suggestionTemplate: have("category") ? "{name} · {category}" : "{name}", exactMatch: false, outFields: ["*"],
+        maxSuggestions: 5, minSuggestCharacters: 2, zoomScale: 5000
+      };
+      if (have("audience") && pub !== "1=1") s.filter = { where: pub };
+      return s;
+    };
+    const named = [[L.points, "Event points"], [L.polygons, "Event areas"], [L.lines, "Event routes"]];
+    const others = webmap.allLayers.filter(l => l.type === "feature" && ![L.points, L.polygons, L.lines].includes(l))
+      .toArray().map(l => [l, l.title]);
+    search.sources = named.concat(others).map(([l, n]) => src(l, n)).filter(Boolean);
+
   }
 
   /* ---------- Routing on public lines ---------- */
