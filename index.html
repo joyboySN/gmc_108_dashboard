@@ -45,9 +45,6 @@ button{font:inherit;color:inherit;cursor:pointer}
 .bar p{margin:3px 0 0;font-size:12.5px;opacity:.85}
 
 /* move Esri widgets below the header */
-.esri-ui-top-right{top:calc(env(safe-area-inset-top,0px) + 100px)!important}
-.esri-ui-top-left{top:calc(env(safe-area-inset-top,0px) + 100px)!important}
-.esri-ui-bottom-right,.esri-ui-bottom-left{bottom:calc(var(--peek) + 6px)!important}
 .esri-search{width:220px}
 
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--paper);border-radius:22px 22px 0 0;
@@ -112,7 +109,6 @@ body.navigating .nav-bottom{display:flex;position:fixed;left:0;right:0;bottom:0;
 .nav-end{border:0;background:#C8102E;color:#fff;font-weight:700;border-radius:999px;padding:0 18px;min-height:42px}
 body.navigating .sheet:not(.open){transform:translateY(110%)}
 body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);height:min(62vh,560px)}
-body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(env(safe-area-inset-top,0px) + 96px)!important}
 .rt-actions{display:flex;gap:8px;margin:4px 0 10px}
 .rt-actions button{flex:1;height:46px;border-radius:14px;font-weight:700;font-size:14px}
 .rt-go{border:0;background:#0F5C3A;color:#fff}
@@ -120,8 +116,19 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
 @media (min-width:900px){ body.navigating .nav-top{left:16px;right:auto;width:400px} body.navigating .nav-bottom{left:16px;right:auto;width:400px;bottom:16px;border-radius:18px} }
 .rtag{display:inline-block;background:#FDE8EA;color:#B00D23;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
 .rlist .row b{font-size:14px}
-.esri-popup--is-docked-bottom-center .esri-popup__main-container{max-height:48vh!important}
-@media (max-width:899px){ body.popup-open .sheet{transform:translateY(110%)!important} body.popup-open .esri-ui-bottom-right,body.popup-open .esri-ui-bottom-left{bottom:52vh!important} }
+.esri-search{width:min(240px, calc(100vw - 110px))}
+/* place card: our own pop-up container */
+.card{position:fixed;z-index:45;background:var(--paper);display:flex;flex-direction:column;box-shadow:0 -8px 28px rgba(30,42,47,.22)}
+.card[hidden]{display:none}
+.card-body{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1}
+.card .esri-features, .card .esri-features__container{box-shadow:none!important;max-height:none!important;width:100%!important}
+@media (max-width:899px){
+  .card{left:0;right:0;bottom:0;max-height:55vh;border-radius:22px 22px 0 0;padding-bottom:env(safe-area-inset-bottom,0px)}
+  body.card-open .sheet{transform:translateY(110%)!important}
+}
+@media (min-width:900px){
+  .card{left:16px;top:16px;bottom:16px;width:400px;border-radius:22px;overflow:hidden}
+}
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -131,9 +138,6 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
   .top{width:420px;padding-left:16px}
   .sheet{left:16px;right:auto;width:400px;bottom:16px;border-radius:22px;height:calc(100vh - 140px);transform:none}
   .handle{display:none}
-  .esri-ui-top-left,.esri-ui-top-right{top:16px!important}
-  .esri-ui-top-left{left:430px!important}
-  .esri-ui-bottom-right,.esri-ui-bottom-left{bottom:16px!important}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -160,6 +164,10 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
     <button class="nav-end" id="navEnd">End</button>
   </div>
 </div>
+
+<section class="card" id="placeCard" aria-label="Place details" hidden>
+  <div class="card-body"><div id="featuresHost"></div></div>
+</section>
 
 <section class="sheet" id="sheet" aria-label="Details panel">
   <button class="handle" id="handle" aria-label="Expand or collapse panel"><span></span></button>
@@ -352,15 +360,14 @@ if (!CFG.WEBMAP_ID || CFG.WEBMAP_ID.startsWith('PASTE')) {
 require([
   "esri/config", "esri/WebMap", "esri/views/MapView", "esri/widgets/Locate", "esri/widgets/Search",
   "esri/widgets/Home", "esri/widgets/LayerList", "esri/widgets/Legend", "esri/Graphic",
-  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils"
-], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils) => {
+  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils", "esri/widgets/Features"
+], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils, Features) => {
   esriConfig.portalUrl = CFG.PORTAL_URL;
 
   const webmap = new WebMap({ portalItem: { id: CFG.WEBMAP_ID } });
   const view = new MapView({
     container: "view", map: webmap,
-    popup: { dockEnabled: window.innerWidth < 900, collapseEnabled: false,
-      dockOptions: { buttonEnabled: false, breakpoint: false, position: "bottom-center" } }
+    popupEnabled: false
   });
   view.ui.move("zoom", "top-right");
 
@@ -372,33 +379,47 @@ require([
   }
   function applyPadding(){
     if (isPhone()) {
-      const popupOpen = document.body.classList.contains('popup-open');
-      view.padding = { top: headerBottom(), left: 0, right: 0, bottom: popupOpen ? Math.round(window.innerHeight * 0.5) : 150 };
+      const cardOpen = document.body.classList.contains('card-open');
+      const card = document.getElementById('placeCard');
+      const bottom = cardOpen ? Math.round(card.getBoundingClientRect().height || window.innerHeight * 0.5) : 150;
+      view.padding = { top: headerBottom(), left: 0, right: 0, bottom };
     } else {
+      const cardOpen = document.body.classList.contains('card-open');
       view.padding = { top: 0, left: 430, right: 0, bottom: 0 };
     }
-    if (view.popup) view.popup.dockEnabled = isPhone();
   }
   window.addEventListener('resize', applyPadding);
-  view.when(() => {
-    applyPadding();
-    reactiveUtils.watch(() => view.popup && view.popup.visible, vis => {
-      document.body.classList.toggle('popup-open', !!vis && isPhone());
+  view.when(applyPadding);
+
+  /* place card (replaces the floating pop-up) */
+  const features = new Features({ view, container: "featuresHost", visibleElements: { closeButton: true, heading: true, actionBar: true } });
+  const card = document.getElementById('placeCard');
+  reactiveUtils.watch(() => features.visible, vis => {
+    card.hidden = !vis;
+    document.body.classList.toggle('card-open', !!vis);
+    requestAnimationFrame(() => {
       applyPadding();
       if (vis && isPhone()) {
-        const target = view.popup.location || (view.popup.selectedFeature && view.popup.selectedFeature.geometry);
+        const f = features.selectedFeature;
+        const target = features.location || (f && f.geometry);
         if (target) view.goTo({ target, zoom: Math.max(view.zoom, 15) }, { duration: 400 }).catch(() => {});
       }
     });
   });
+  function showPlace(f, location){
+    if (isPhone()) openSheet(false);
+    features.open({ features: [f], location: location || (f.geometry.type === "point" ? f.geometry : f.geometry.centroid) });
+  }
+  function closePlace(){ features.close(); }
 
   const locate = new Locate({ view, useHeadingEnabled: false, goToOverride: (v, o) => { o.target.scale = 8000; return v.goTo(o.target); } });
   view.ui.add(locate, "top-right");
   const home = new Home({ view });
   view.ui.add(home, "top-right");
-  const search = new Search({ view, popupEnabled: true, includeDefaultSources: false,
+  const search = new Search({ view, popupEnabled: false, includeDefaultSources: false,
     allPlaceholder: "Search event places", maxSuggestions: 8 });
   view.ui.add(search, "top-left");
+  search.on("select-result", e => { if (e.result && e.result.feature) showPlace(e.result.feature); });
 
   let L = { points: null, lines: null, polygons: null };
   let me = null;
@@ -513,7 +534,7 @@ require([
     if (window.innerWidth < 900) openSheet(false);
     const g = f.geometry;
     const go = g.type === "point" ? view.goTo({ target: g, scale: 5000 }) : view.goTo(g.extent.clone().expand(1.6));
-    go.then(() => view.openPopup({ features: [f], location: g.type === "point" ? g : g.centroid }));
+    go.then(() => showPlace(f));
   }
 
   /* ---------- Restricted areas: red overlay + overview list ---------- */
@@ -533,7 +554,7 @@ require([
         if (kind === "area") symbol = { type: "simple-fill", style: "backward-diagonal", color: [200, 16, 46, 0.85], outline: { color: [200, 16, 46, 1], width: 2.5, style: "dash" } };
         else if (kind === "road") symbol = { type: "simple-line", color: [200, 16, 46, 0.95], width: 3.5, style: "dash" };
         else symbol = { type: "simple-marker", style: "circle", size: 24, color: [0, 0, 0, 0], outline: { color: [200, 16, 46, 1], width: 3 } };
-        restrictedLayer.add(new Graphic({ geometry: f.geometry, symbol, attributes: f.attributes, popupTemplate: f.layer && f.layer.popupTemplate }));
+        restrictedLayer.add(new Graphic({ geometry: f.geometry, symbol }));
       });
     }
     if (CFG.SHOW_RESTRICTED_OVERLAY && !CFG.PUBLIC_ONLY) webmap.add(restrictedLayer);
@@ -591,15 +612,15 @@ require([
       if (!l || !l.popupTemplate) return;
       l.popupTemplate.actions = [{ id: "route-here", title: "Route here", icon: "walking", type: "button" }];
     });
-    reactiveUtils.on(() => view.popup, "trigger-action", e => {
+    features.on("trigger-action", e => {
       if (e.action.id !== "route-here") return;
-      const f = view.popup.selectedFeature; if (!f) return;
+      const f = features.selectedFeature; if (!f) return;
       const a = f.attributes || {};
       let ll = (a.lat && a.lon) ? [a.lon, a.lat] : null;
       if (!ll) { const c = f.geometry.type === "point" ? f.geometry : f.geometry.centroid; ll = [c.longitude, c.latitude]; }
       const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
       rtTo = { ll, label: (stand && a.descr) ? a.descr : (a.name || "Selected place"), restricted: a.audience === "Coordinators" };
-      view.closePopup();
+      closePlace();
       if (!rtFrom && me) rtFrom = { ll: [me[1], me[0]], label: "My location" };
       setTab('route'); openSheet(true); runRoute();
     });
@@ -611,8 +632,13 @@ require([
     if (which) { if (window.innerWidth < 900) openSheet(false); toast('Tap the map to choose the ' + (which === 'from' ? 'start' : 'destination')); }
   }
   view.on("click", e => {
-    if (!picking) return;
-    e.stopPropagation();
+    if (!picking) {
+      if (nav) return;
+      features.open({ location: e.mapPoint, fetchFeatures: true });
+      // close the card again if nothing was tapped
+      reactiveUtils.whenOnce(() => !features.waitingForResult).then(() => { if (!features.featureCount) features.close(); });
+      return;
+    }
     const pt = { ll: [e.mapPoint.longitude, e.mapPoint.latitude], label: "Point on map" };
     if (picking === 'from') rtFrom = pt; else rtTo = pt;
     setPick(null); setTab('route'); openSheet(true); runRoute();
@@ -896,7 +922,7 @@ require([
   }
   document.querySelectorAll('.tab').forEach(b => b.onclick = () => { setTab(b.dataset.tab); openSheet(true); });
   document.getElementById('handle').onclick = () => openSheet(!sheet.classList.contains('open'));
-  view.on("click", () => { if (!picking && window.innerWidth < 900) openSheet(false); });
+  view.on("click", () => { if (!picking && isPhone()) openSheet(false); });
 });
 }
 </script>
