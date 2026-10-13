@@ -16,7 +16,7 @@
   window.GMC_CONFIG = {
     WEBMAP_ID: "8c692c1a95444a92b79993292e278226",
     PORTAL_URL: "https://rgob.maps.arcgis.com",
-    USE_ESRI_IMAGERY: false,         // true = Esri satellite + labels (recommended for public use)
+    USE_ESRI_IMAGERY: true,          // true = Esri satellite + labels (recommended for public use)
     PUBLIC_ONLY: false,              // true = hide restricted features completely
     SHOW_RESTRICTED_OVERLAY: true    // true = mark restricted areas, roads and points in red on the map
   };
@@ -117,18 +117,9 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
 .rtag{display:inline-block;background:#FDE8EA;color:#B00D23;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
 .rlist .row b{font-size:14px}
 .esri-search{width:min(240px, calc(100vw - 110px))}
-/* place card: our own pop-up container */
-.card{position:fixed;z-index:45;background:var(--paper);display:flex;flex-direction:column;box-shadow:0 -8px 28px rgba(30,42,47,.22)}
-.card[hidden]{display:none}
-.card-body{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1}
-.card .esri-features, .card .esri-features__container{box-shadow:none!important;max-height:none!important;width:100%!important}
-@media (max-width:899px){
-  .card{left:0;right:0;bottom:0;max-height:55vh;border-radius:22px 22px 0 0;padding-bottom:env(safe-area-inset-bottom,0px)}
-  body.card-open .sheet{transform:translateY(110%)!important}
-}
-@media (min-width:900px){
-  .card{left:16px;top:16px;bottom:16px;width:400px;border-radius:22px;overflow:hidden}
-}
+/* compact pop-up */
+.esri-popup .esri-popup__main-container{width:min(300px, calc(100vw - 40px))!important;max-height:40vh!important}
+.esri-popup{font-size:13.5px}
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -164,10 +155,6 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
     <button class="nav-end" id="navEnd">End</button>
   </div>
 </div>
-
-<section class="card" id="placeCard" aria-label="Place details" hidden>
-  <div class="card-body"><div id="featuresHost"></div></div>
-</section>
 
 <section class="sheet" id="sheet" aria-label="Details panel">
   <button class="handle" id="handle" aria-label="Expand or collapse panel"><span></span></button>
@@ -360,14 +347,15 @@ if (!CFG.WEBMAP_ID || CFG.WEBMAP_ID.startsWith('PASTE')) {
 require([
   "esri/config", "esri/WebMap", "esri/views/MapView", "esri/widgets/Locate", "esri/widgets/Search",
   "esri/widgets/Home", "esri/widgets/LayerList", "esri/widgets/Legend", "esri/Graphic",
-  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils", "esri/widgets/Features"
-], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils, Features) => {
+  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils"
+], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils) => {
   esriConfig.portalUrl = CFG.PORTAL_URL;
 
   const webmap = new WebMap({ portalItem: { id: CFG.WEBMAP_ID } });
   const view = new MapView({
     container: "view", map: webmap,
-    popupEnabled: false
+    popup: { dockEnabled: false, collapseEnabled: false, alignment: "auto",
+      dockOptions: { buttonEnabled: false, breakpoint: false } }
   });
   view.ui.move("zoom", "top-right");
 
@@ -378,48 +366,41 @@ require([
     return el ? Math.round(el.getBoundingClientRect().bottom) + 8 : 100;
   }
   function applyPadding(){
-    if (isPhone()) {
-      const cardOpen = document.body.classList.contains('card-open');
-      const card = document.getElementById('placeCard');
-      const bottom = cardOpen ? Math.round(card.getBoundingClientRect().height || window.innerHeight * 0.5) : 150;
-      view.padding = { top: headerBottom(), left: 0, right: 0, bottom };
-    } else {
-      const cardOpen = document.body.classList.contains('card-open');
-      view.padding = { top: 0, left: 430, right: 0, bottom: 0 };
-    }
+    view.padding = isPhone() ? { top: headerBottom(), left: 0, right: 0, bottom: 150 } : { top: 0, left: 430, right: 0, bottom: 0 };
   }
   window.addEventListener('resize', applyPadding);
   view.when(applyPadding);
 
-  /* place card (replaces the floating pop-up) */
-  const features = new Features({ view, container: "featuresHost", visibleElements: { closeButton: true, heading: true, actionBar: true } });
-  const card = document.getElementById('placeCard');
-  reactiveUtils.watch(() => features.visible, vis => {
-    card.hidden = !vis;
-    document.body.classList.toggle('card-open', !!vis);
-    requestAnimationFrame(() => {
-      applyPadding();
-      if (vis && isPhone()) {
-        const f = features.selectedFeature;
-        const target = features.location || (f && f.geometry);
-        if (target) view.goTo({ target, zoom: Math.max(view.zoom, 15) }, { duration: 400 }).catch(() => {});
-      }
+  /* compact pop-up: on phones it opens just below the place, clear of the header */
+  let popupBusy = false;
+  reactiveUtils.when(() => view.popup, () => {
+    reactiveUtils.watch(() => view.popup.visible && view.popup.location, loc => {
+      if (!loc) { applyPadding(); return; }
+      if (!isPhone() || popupBusy) return;
+      view.popup.alignment = "bottom-center";
+      // move the tapped place to just under the header so the pop-up fits below it
+      const hb = headerBottom();
+      const h = view.height;
+      popupBusy = true;
+      view.padding = { top: hb, left: 0, right: 0, bottom: Math.max(0, h - hb - 140) };
+      view.goTo({ target: loc }, { duration: 350 }).catch(() => {}).then(() => { popupBusy = false; });
     });
+    reactiveUtils.watch(() => view.popup.visible, vis => { if (!vis) applyPadding(); });
   });
   function showPlace(f, location){
     if (isPhone()) openSheet(false);
-    features.open({ features: [f], location: location || (f.geometry.type === "point" ? f.geometry : f.geometry.centroid) });
+    view.openPopup({ features: [f], location: location || (f.geometry.type === "point" ? f.geometry : f.geometry.centroid) });
   }
-  function closePlace(){ features.close(); }
+  function closePlace(){ view.closePopup(); }
 
   const locate = new Locate({ view, useHeadingEnabled: false, goToOverride: (v, o) => { o.target.scale = 8000; return v.goTo(o.target); } });
   view.ui.add(locate, "top-right");
   const home = new Home({ view });
   view.ui.add(home, "top-right");
-  const search = new Search({ view, popupEnabled: false, includeDefaultSources: false,
+  const search = new Search({ view, popupEnabled: true, includeDefaultSources: false,
     allPlaceholder: "Search event places", maxSuggestions: 8 });
   view.ui.add(search, "top-left");
-  search.on("select-result", e => { if (e.result && e.result.feature) showPlace(e.result.feature); });
+  search.on("select-result", () => { if (isPhone()) openSheet(false); });
 
   let L = { points: null, lines: null, polygons: null };
   let me = null;
@@ -612,9 +593,9 @@ require([
       if (!l || !l.popupTemplate) return;
       l.popupTemplate.actions = [{ id: "route-here", title: "Route here", icon: "walking", type: "button" }];
     });
-    features.on("trigger-action", e => {
+    reactiveUtils.on(() => view.popup, "trigger-action", e => {
       if (e.action.id !== "route-here") return;
-      const f = features.selectedFeature; if (!f) return;
+      const f = view.popup.selectedFeature; if (!f) return;
       const a = f.attributes || {};
       let ll = (a.lat && a.lon) ? [a.lon, a.lat] : null;
       if (!ll) { const c = f.geometry.type === "point" ? f.geometry : f.geometry.centroid; ll = [c.longitude, c.latitude]; }
@@ -632,13 +613,8 @@ require([
     if (which) { if (window.innerWidth < 900) openSheet(false); toast('Tap the map to choose the ' + (which === 'from' ? 'start' : 'destination')); }
   }
   view.on("click", e => {
-    if (!picking) {
-      if (nav) return;
-      features.open({ location: e.mapPoint, fetchFeatures: true });
-      // close the card again if nothing was tapped
-      reactiveUtils.whenOnce(() => !features.waitingForResult).then(() => { if (!features.featureCount) features.close(); });
-      return;
-    }
+    if (!picking) return;
+    e.stopPropagation();
     const pt = { ll: [e.mapPoint.longitude, e.mapPoint.latitude], label: "Point on map" };
     if (picking === 'from') rtFrom = pt; else rtTo = pt;
     setPick(null); setTab('route'); openSheet(true); runRoute();
