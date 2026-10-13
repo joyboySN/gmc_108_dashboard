@@ -17,7 +17,8 @@
     WEBMAP_ID: "8c692c1a95444a92b79993292e278226",
     PORTAL_URL: "https://rgob.maps.arcgis.com",
     USE_ESRI_IMAGERY: false,         // true = Esri satellite + labels (recommended for public use)
-    PUBLIC_ONLY: true                // true = hide coordinator-only features
+    PUBLIC_ONLY: false,              // true = hide restricted features completely
+    SHOW_RESTRICTED_OVERLAY: true    // true = mark restricted areas, roads and points in red on the map
   };
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -117,6 +118,8 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
 .rt-go{border:0;background:#0F5C3A;color:#fff}
 .rt-view{border:1px solid var(--line);background:var(--paper)}
 @media (min-width:900px){ body.navigating .nav-top{left:16px;right:auto;width:400px} body.navigating .nav-bottom{left:16px;right:auto;width:400px;bottom:16px;border-radius:18px} }
+.rtag{display:inline-block;background:#FDE8EA;color:#B00D23;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
+.rlist .row b{font-size:14px}
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
 .msg div{max-width:420px;line-height:1.5}
@@ -175,8 +178,6 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
     <p class="hint" id="routeHint">Uses the public bus routes, diversions, access roads and footpaths from the event plan.</p>
     <div class="rt-field"><span class="rt-dot" style="background:#1A73E8"></span><div><small>From</small><b id="rtFrom">Not set</b></div></div>
     <div class="rt-btns"><button class="chip-btn" id="rtFromLoc">My location</button><button class="chip-btn" id="rtFromMap">Tap on the map</button></div>
-    <label class="sr" for="rtFromSel">Choose a start place</label>
-    <select class="rt-sel" id="rtFromSel"><option value="">Or choose a place…</option></select>
     <div class="rt-field" style="margin-top:6px"><span class="rt-dot" style="background:#6E1E2B"></span><div><small>To</small><b id="rtTo">Not set</b></div></div>
     <div class="rt-btns">
       <button class="chip-btn" id="rtToZeray">Zeray venue</button>
@@ -205,9 +206,11 @@ body.navigating .esri-ui-top-left,body.navigating .esri-ui-top-right{top:calc(en
     <div class="kpis" id="kpis"><div class="kpi"><strong>…</strong><span>Loading</span></div></div>
     <h2 style="margin-top:18px">Tented stays by capacity</h2>
     <div id="tentBars"></div>
+    <h2 style="margin-top:18px">Restricted areas and roads</h2>
+    <p class="hint">Marked with red hatching or red dashes on the map. Access is for invitees, officials and authorised vehicles only.</p>
+    <div class="rlist" id="restrictedList"></div>
     <h2 style="margin-top:18px">Zeray parking by lot</h2>
     <div id="lotBars"></div>
-    <p class="footer">Map data from the GMC 108 planning team. Routes and parking may change on the day; follow instructions from marshals and police.</p>
   </div>
 </section>
 
@@ -385,6 +388,7 @@ require([
       l.definitionExpression = l.definitionExpression ? `(${l.definitionExpression}) AND audience = 'Public'` : "audience = 'Public'";
     });
     setupSearch();
+    drawRestricted();
     setupRouteAction();
     buildNetwork();
     loadPlaces();
@@ -461,9 +465,10 @@ require([
         let sub = a.category;
         if (a.cap_veh > 0) sub += ` · ${a.cap_veh} vehicles`;
         if (a.cap_people > 0) sub += ` · ${Number(a.cap_people).toLocaleString()} people`;
+        const rTag = a.audience === "Coordinators" ? ' <span class="rtag">Restricted</span>' : '';
         html += `<button class="row" data-g="${esc(key)}" data-i="${nearCache[key].indexOf(x.f)}">
           <span class="badge" style="background:${COLORS[a.category] || '#555'}">${GLYPH[a.category] || 'P'}</span>
-          <span class="txt"><b>${esc(title)}</b><small>${esc(sub)}</small></span>
+          <span class="txt"><b>${esc(title)}${rTag}</b><small>${esc(sub)}</small></span>
           <span class="dist">${fmtD(x.d)}<small>${travel(x.d)}</small></span></button>`;
       });
     }
@@ -478,6 +483,37 @@ require([
     const g = f.geometry;
     const go = g.type === "point" ? view.goTo({ target: g, scale: 5000 }) : view.goTo(g.extent.clone().expand(1.6));
     go.then(() => view.openPopup({ features: [f], location: g.type === "point" ? g : g.centroid }));
+  }
+
+  /* ---------- Restricted areas: red overlay + overview list ---------- */
+  const restrictedLayer = new GraphicsLayer({ title: "Restricted areas and roads", listMode: "show" });
+  async function drawRestricted(){
+    const items = [];
+    for (const [lyr, kind] of [[L.polygons, "area"], [L.lines, "road"], [L.points, "point"]]) {
+      if (!lyr) continue;
+      const q = lyr.createQuery();
+      q.where = "audience = 'Coordinators'"; q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
+      let fs = [];
+      try { fs = (await lyr.queryFeatures(q)).features; } catch (e) { console.error(e); }
+      fs.forEach(f => {
+        items.push({ f, kind });
+        if (!CFG.SHOW_RESTRICTED_OVERLAY) return;
+        let symbol;
+        if (kind === "area") symbol = { type: "simple-fill", style: "backward-diagonal", color: [200, 16, 46, 0.85], outline: { color: [200, 16, 46, 1], width: 2.5, style: "dash" } };
+        else if (kind === "road") symbol = { type: "simple-line", color: [200, 16, 46, 0.95], width: 3.5, style: "dash" };
+        else symbol = { type: "simple-marker", style: "circle", size: 24, color: [0, 0, 0, 0], outline: { color: [200, 16, 46, 1], width: 3 } };
+        restrictedLayer.add(new Graphic({ geometry: f.geometry, symbol, attributes: f.attributes, popupTemplate: f.layer && f.layer.popupTemplate }));
+      });
+    }
+    if (CFG.SHOW_RESTRICTED_OVERLAY && !CFG.PUBLIC_ONLY) webmap.add(restrictedLayer);
+    const box = document.getElementById('restrictedList');
+    if (!box) return;
+    if (!items.length || CFG.PUBLIC_ONLY) { box.innerHTML = '<p class="hint">None shown.</p>'; return; }
+    const label = { area: "Restricted area", road: "Restricted road", point: "Restricted point" };
+    box.innerHTML = items.map((x, i) => `<button class="row" data-i="${i}">
+      <span class="badge" style="background:#C8102E">!</span>
+      <span class="txt"><b>${esc(x.f.attributes.name)}</b><small>${label[x.kind]} · ${esc(x.f.attributes.category || '')}</small></span></button>`).join('');
+    box.querySelectorAll('.row').forEach(b => b.onclick = () => openFeature(items[+b.dataset.i].f));
   }
 
   /* ---------- Search: event data + addresses ---------- */
@@ -503,7 +539,7 @@ require([
   async function buildNetwork(){
     if (!L.lines) return;
     const q = L.lines.createQuery();
-    q.where = `category IN (${inList(ROUTE_CATS)})` + (CFG.PUBLIC_ONLY ? " AND audience = 'Public'" : "");
+    q.where = `category IN (${inList(ROUTE_CATS)}) AND audience = 'Public'`; // never route over restricted roads
     q.outFields = ["name", "category"]; q.returnGeometry = true; q.outSpatialReference = { wkid: 4326 };
     try {
       const fs = (await L.lines.queryFeatures(q)).features;
@@ -522,7 +558,7 @@ require([
       let ll = (a.lat && a.lon) ? [a.lon, a.lat] : null;
       if (!ll) { const c = f.geometry.type === "point" ? f.geometry : f.geometry.centroid; ll = [c.longitude, c.latitude]; }
       const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
-      rtTo = { ll, label: (stand && a.descr) ? a.descr : (a.name || "Selected place") };
+      rtTo = { ll, label: (stand && a.descr) ? a.descr : (a.name || "Selected place"), restricted: a.audience === "Coordinators" };
       view.closePopup();
       if (!rtFrom && me) rtFrom = { ll: [me[1], me[0]], label: "My location" };
       setTab('route'); openSheet(true); runRoute();
@@ -567,7 +603,7 @@ require([
       if (!lyr) continue;
       const q = lyr.createQuery();
       q.where = (CFG.PUBLIC_ONLY ? "audience = 'Public'" : "1=1");
-      q.outFields = ["name", "descr", "category", "lat", "lon"]; q.returnGeometry = false;
+      q.outFields = ["name", "descr", "category", "lat", "lon", "audience"]; q.returnGeometry = false;
       try { (await lyr.queryFeatures(q)).features.forEach(f => all.push(f.attributes)); } catch (e) { console.error(e); }
     }
     const seen = new Set();
@@ -575,11 +611,12 @@ require([
       const stand = ["Taxi stand", "Bus & taxi stand", "Bus parking"].includes(a.category);
       const label = stand && a.descr ? a.descr : a.name;
       const grp = PLACE_GROUPS.find(g => g.cats.includes(a.category));
-      return { label, cat: a.category, grp: grp ? grp.key : null, ll: [a.lon, a.lat] };
+      const restricted = a.audience === "Coordinators";
+      return { label: restricted ? label + " (restricted)" : label, cat: a.category, grp: grp ? grp.key : null, ll: [a.lon, a.lat], restricted };
     }).filter(p => p.grp && p.label).filter(p => {
       const k = p.label + p.ll[0].toFixed(4) + p.ll[1].toFixed(4); if (seen.has(k)) return false; seen.add(k); return true;
     }).sort((a, b) => a.label.localeCompare(b.label));
-    ['rtFromSel', 'rtToSel'].forEach(id => {
+    ['rtToSel'].forEach(id => {
       const sel = document.getElementById(id);
       sel.innerHTML = '<option value="">Or choose a place…</option>' + PLACE_GROUPS.map(g => {
         const items = places.map((p, i) => [p, i]).filter(([p]) => p.grp === g.key);
@@ -587,12 +624,11 @@ require([
       }).join('');
     });
   }
-  document.getElementById('rtFromSel').onchange = e => { const p = places[+e.target.value]; if (p) { rtFrom = { ll: p.ll, label: p.label }; runRoute(); } };
-  document.getElementById('rtToSel').onchange = e => { const p = places[+e.target.value]; if (p) { rtTo = { ll: p.ll, label: p.label }; runRoute(); } };
+  document.getElementById('rtToSel').onchange = e => { const p = places[+e.target.value]; if (p) { rtTo = { ll: p.ll, label: p.label, restricted: p.restricted }; runRoute(); } };
   document.querySelectorAll('[data-near]').forEach(b => b.onclick = () => {
     if (!rtFrom && me) rtFrom = { ll: [me[1], me[0]], label: "My location" };
-    if (!rtFrom) { toast('Set a starting point first: My location, Tap on the map, or choose a place'); return; }
-    const cand = places.filter(p => p.grp === b.dataset.near);
+    if (!rtFrom) { toast('Set a starting point first: My location or Tap on the map'); return; }
+    const cand = places.filter(p => p.grp === b.dataset.near && !p.restricted);
     if (!cand.length) { toast('No places of that type found'); return; }
     const o = [rtFrom.ll[1], rtFrom.ll[0]];
     const best = cand.map(p => ({ p, d: dist(o, [p.ll[1], p.ll[0]]) })).sort((x, y) => x.d - y.d)[0].p;
@@ -630,7 +666,8 @@ require([
     const mins = Math.max(1, Math.round(r.total / speed));
     const km = (r.total / 1000).toFixed(1);
     lastRoute = prepRoute(r);
-    let h = partialNote + `<div class="rt-sum"><strong>${r.partial ? 'About ' : ''}${mins} min</strong><span>${km} km · ${rtMode === 'walk' ? 'walking' : 'by vehicle'}</span></div>`;
+    const restrictedNote = rtTo.restricted ? `<div class="warn" style="margin:0 0 8px;background:#FDE8EA;color:#8A0C1E"><b>Restricted destination:</b> access is for invitees and authorised vehicles only. Check with marshals before going.</div>` : '';
+    let h = restrictedNote + partialNote + `<div class="rt-sum"><strong>${r.partial ? 'About ' : ''}${mins} min</strong><span>${km} km · ${rtMode === 'walk' ? 'walking' : 'by vehicle'}</span></div>`;
     h += `<div class="rt-actions"><button class="rt-view" id="rtViewMap">View on map</button><button class="rt-go" id="rtStart">Start navigation</button></div>`;
     r.steps.forEach((st, i) => {
       const m = st.m < 1000 ? `${Math.round(st.m / 10) * 10} m` : `${(st.m / 1000).toFixed(1)} km`;
