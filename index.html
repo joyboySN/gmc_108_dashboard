@@ -130,6 +130,12 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
 .switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
 .switch:checked{background:#0F7C80}
 .switch:checked::after{transform:translateX(18px)}
+.lg-group{border-bottom:1px solid #EEF0EC;padding:4px 0 8px}
+.lg-group .tg{border-bottom:0}
+.lg-items{padding:0 0 0 44px;display:flex;flex-direction:column;gap:6px}
+.lg-item{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--ink)}
+.lg-sym{width:30px;height:24px;display:flex;align-items:center;justify-content:center;flex:none}
+.lg-group.off .lg-items{opacity:.4}
 .tg-all{display:flex;gap:8px;margin:2px 0 6px}
 .footer{font-size:11.5px;color:var(--ink-soft);margin-top:18px;line-height:1.5}
 .msg{position:fixed;inset:0;z-index:99;display:grid;place-items:center;background:var(--mist);padding:24px;text-align:center}
@@ -205,10 +211,9 @@ body.navigating .sheet.open{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);
     <div id="rtResult"></div>
   </div>
   <div class="pane" id="pane-layers" hidden>
-    <h2>Show on map</h2>
+    <h2>Map Legend</h2>
+    <p class="hint">Switch a group off to hide it on the map.</p>
     <div id="toggles"></div>
-    <h2 style="margin-top:18px">Map Legend</h2>
-    <div id="legend"></div>
   </div>
   <div class="pane" id="pane-overview" hidden>
     <h2>At a glance</h2>
@@ -359,14 +364,15 @@ if (!CFG.WEBMAP_ID || CFG.WEBMAP_ID.startsWith('PASTE')) {
 require([
   "esri/config", "esri/WebMap", "esri/views/MapView", "esri/widgets/Locate", "esri/widgets/Search",
   "esri/widgets/Home", "esri/widgets/LayerList", "esri/widgets/Legend", "esri/Graphic",
-  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils"
-], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils) => {
+  "esri/layers/GraphicsLayer", "esri/core/reactiveUtils", "esri/symbols/support/symbolUtils"
+], (esriConfig, WebMap, MapView, Locate, Search, Home, LayerList, Legend, Graphic, GraphicsLayer, reactiveUtils, symbolUtils) => {
   esriConfig.portalUrl = CFG.PORTAL_URL;
 
   const webmap = new WebMap({ portalItem: { id: CFG.WEBMAP_ID } });
   const view = new MapView({
     container: "view", map: webmap,
-    popup: { dockEnabled: window.innerWidth < 900, collapseEnabled: false,
+    popup: { dockEnabled: window.innerWidth < 900, collapseEnabled: true,
+      visibleElements: { collapseButton: true, closeButton: true },
       dockOptions: { buttonEnabled: false, breakpoint: false, position: "top-center" } }
   });
   view.ui.move("zoom", "top-right");
@@ -386,6 +392,7 @@ require([
   /* standard pop-up: on phones the header slides away while it is open (nothing else changes, so the pop-up stays open) */
   reactiveUtils.when(() => view.popup, () => {
     view.popup.autoCloseEnabled = false;
+    reactiveUtils.watch(() => view.popup.selectedFeature, () => { if (view.popup.collapsed) view.popup.collapsed = false; });
     reactiveUtils.watch(() => view.popup.visible, vis => {
       document.body.classList.toggle('popup-open', !!vis && isPhone());
       if (vis && isPhone()) {
@@ -439,7 +446,6 @@ require([
     setupRouteAction();
     buildNetwork();
     loadPlaces();
-    new Legend({ view, container: "legend" });
     loadOverview();
     renderNear();
   }).catch(err => {
@@ -510,20 +516,70 @@ require([
       if (lyr) lyr.visible = tgState[t.id] !== false;
     });
   }
-  function buildToggles(){
+  function rendererItems(lyr, cats){
+    // symbols for the given categories (or every class when cats is null) from the layer's own style
+    const r = lyr && lyr.renderer; const out = [];
+    if (!r) return out;
+    if (r.type === "unique-value") {
+      const infos = (r.uniqueValueInfos && r.uniqueValueInfos.length) ? r.uniqueValueInfos
+        : (r.uniqueValueGroups || []).flatMap(g => (g.classes || []).map(c => ({ value: c.values && c.values[0] && c.values[0][0], label: c.label, symbol: c.symbol })));
+      infos.forEach(i => {
+        const v = i.value != null ? String(i.value) : "";
+        if (!cats || cats.includes(v)) out.push({ label: i.label || v, symbol: i.symbol, order: cats ? cats.indexOf(v) : 0 });
+      });
+      out.sort((a, b) => a.order - b.order);
+    } else if (r.symbol) {
+      out.push({ label: lyr.title, symbol: r.symbol });
+    }
+    return out;
+  }
+  const RESTRICTED_SYMBOLS = [
+    { label: "Restricted area", symbol: { type: "simple-fill", style: "backward-diagonal", color: [200, 16, 46, 0.85], outline: { color: [200, 16, 46, 1], width: 2, style: "dash" } } },
+    { label: "Restricted road", symbol: { type: "simple-line", color: [200, 16, 46, 1], width: 3, style: "dash" } },
+    { label: "Restricted point", symbol: { type: "simple-marker", size: 16, color: [0, 0, 0, 0], outline: { color: [200, 16, 46, 1], width: 3 } } }
+  ];
+  async function buildToggles(){
     const box = document.getElementById('toggles'); if (!box) return;
-    const available = TOGGLES.filter(t => {
-      if (t.layer) return !!L[t.layer];
-      if (t.layerTitle) return !!webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle));
-      return true;
-    });
+    const lyrFor = t => t.layer ? L[t.layer] : (t.layerTitle ? webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle)) : null);
+    const available = TOGGLES.filter(t => (t.layer || t.layerTitle) ? !!lyrFor(t) : true);
+    await Promise.all(webmap.allLayers.filter(l => l.type === "feature").toArray().map(l => l.load().catch(() => null)));
     available.forEach(t => { if (!(t.id in tgState)) tgState[t.id] = true; });
+    // collect legend items per group: points first, then lines, then areas
+    const groups = available.map(t => {
+      let items = [];
+      if (t.cats) ["points", "lines", "polygons"].forEach(k => { if (t.cats[k] && L[k]) items = items.concat(rendererItems(L[k], t.cats[k])); });
+      else if (t.overlay) items = RESTRICTED_SYMBOLS.map(x => ({ ...x }));
+      else items = rendererItems(lyrFor(t), null);
+      // one entry per label
+      const seen = new Set(); items = items.filter(i => { const k = i.label; if (seen.has(k)) return false; seen.add(k); return true; });
+      return { t, items };
+    });
     box.innerHTML = `<div class="tg-all"><button class="chip-btn" id="tgAllOn">Show all</button><button class="chip-btn" id="tgAllOff">Hide all</button></div>` +
-      available.map(t => `<div class="tg"><span class="badge" style="background:${t.c}">${t.g}</span>
-        <label for="tg-${t.id}">${t.label}</label>
-        <input class="switch" type="checkbox" id="tg-${t.id}" data-id="${t.id}" ${tgState[t.id] ? 'checked' : ''}></div>`).join('');
-    box.querySelectorAll('.switch').forEach(sw => sw.onchange = () => { tgState[sw.dataset.id] = sw.checked; applyToggles(); });
-    const all = on => { available.forEach(t => tgState[t.id] = on); box.querySelectorAll('.switch').forEach(sw => sw.checked = on); applyToggles(); };
+      groups.map(({ t, items }, gi) => `<div class="lg-group ${tgState[t.id] ? '' : 'off'}" id="lg-${t.id}">
+        <div class="tg"><span class="badge" style="background:${t.c}">${t.g}</span>
+          <label for="tg-${t.id}"><b>${t.label}</b></label>
+          <input class="switch" type="checkbox" id="tg-${t.id}" data-id="${t.id}" ${tgState[t.id] ? 'checked' : ''}></div>
+        <div class="lg-items">${items.map((it, ii) => `<div class="lg-item"><span class="lg-sym" id="sym-${gi}-${ii}"></span><span>${esc(it.label)}</span></div>`).join('')}</div>
+      </div>`).join('');
+    // draw the real map symbols next to each label
+    groups.forEach(({ items }, gi) => items.forEach((it, ii) => {
+      if (!it.symbol) return;
+      const sym = it.symbol.declaredClass ? it.symbol : new Graphic({ symbol: it.symbol }).symbol; // plain objects -> real symbols
+      symbolUtils.renderPreviewHTML(sym, { size: 20, maxSize: 24 }).then(node => {
+        const host = document.getElementById(`sym-${gi}-${ii}`); if (host) { host.innerHTML = ''; host.appendChild(node); }
+      }).catch(() => {});
+    }));
+    box.querySelectorAll('.switch').forEach(sw => sw.onchange = () => {
+      tgState[sw.dataset.id] = sw.checked;
+      document.getElementById('lg-' + sw.dataset.id).classList.toggle('off', !sw.checked);
+      applyToggles();
+    });
+    const all = on => {
+      available.forEach(t => tgState[t.id] = on);
+      box.querySelectorAll('.switch').forEach(sw => sw.checked = on);
+      box.querySelectorAll('.lg-group').forEach(g => g.classList.toggle('off', !on));
+      applyToggles();
+    };
     document.getElementById('tgAllOn').onclick = () => all(true);
     document.getElementById('tgAllOff').onclick = () => all(false);
   }
