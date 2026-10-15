@@ -746,21 +746,30 @@ require([
     const pub = CFG.PUBLIC_ONLY ? "audience = 'Public'" : "1=1";
     const src = (layer, name) => {
       if (!layer) return null;
-      const have = f => !layer.fields || layer.fields.some(x => x.name.toLowerCase() === f);
-      const fields = ["name", "descr", "location", "category", "stall_numb", "remarks"].filter(have);
+      // use each layer's real field names (e.g. "Name" in the campsite layers, "name" in the others)
+      const real = f => { const x = (layer.fields || []).find(fl => fl.name.toLowerCase() === f); return x ? x.name : null; };
+      const fields = ["name", "descr", "location", "category", "stall_numb", "remarks"].map(real).filter(Boolean);
       if (!fields.length) return null;
+      const nm = real("name"), cat = real("category"), sn = real("stall_numb"), loc = real("location");
+      let template;
+      if (nm && cat) template = `{${nm}} · {${cat}}`;
+      else if (nm && (layer === L.camp || layer === L.camproad)) template = `{${nm}} · 45 AC campsite`;
+      else if (nm) template = `{${nm}}`;
+      else if (sn) template = `Food stall {${sn}}` + (loc ? ` · {${loc}}` : "");
+      else template = `{${fields[0]}}`;
       const s = {
         layer, name, placeholder: "Search " + name.toLowerCase(),
-        searchFields: fields, displayField: have("name") ? "name" : (have("stall_numb") ? "Stall_Numb" : fields[0]),
-        suggestionTemplate: have("name") ? (have("category") ? "{name} · {category}" : "{name}") : (have("stall_numb") ? "Food stall {Stall_Numb} · {Location}" : "{" + fields[0] + "}"), exactMatch: false, outFields: ["*"],
+        searchFields: fields, displayField: nm || sn || fields[0],
+        suggestionTemplate: template, exactMatch: false, outFields: ["*"],
         maxSuggestions: 5, minSuggestCharacters: 2, zoomScale: 5000
       };
-      if (have("audience") && pub !== "1=1") s.filter = { where: pub };
+      const aud = real("audience");
+      if (aud && pub !== "1=1") s.filter = { where: pub };
       return s;
     };
     const named = [[L.points, "Event points"], [L.polygons, "Event areas"], [L.lines, "Event routes"]];
     const others = webmap.allLayers.filter(l => l.type === "feature" && ![L.points, L.polygons, L.lines].includes(l))
-      .toArray().map(l => [l, l.title]);
+      .toArray().map(l => [l, l === L.camp ? "45 AC campsite" : (l === L.camproad ? "45 AC campsite roads" : l.title)]);
     search.sources = named.concat(others).map(([l, n]) => src(l, n)).filter(Boolean);
 
   }
