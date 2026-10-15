@@ -288,6 +288,25 @@ const GMCRouter = (() => {
         else { const n = addNode(q); edge(s[0], n, s[2]); edge(n, s[1], s[2]); edge(v, n, join); }
       });
     }
+    // bridge small separate networks (e.g. a campsite's internal roads) to the main network with a short walk link
+    const BRIDGE = opts.bridge || 0;
+    if (BRIDGE > 0) {
+      const comp = new Int32Array(nodes.length).fill(-1), sizes = [];
+      for (let i = 0; i < nodes.length; i++) {
+        if (comp[i] >= 0) continue; const c = sizes.length; let n = 0; const st = [i]; comp[i] = c;
+        while (st.length) { const u = st.pop(); n++; for (const e of adj[u]) if (comp[e.to] < 0) { comp[e.to] = c; st.push(e.to); } }
+        sizes.push(n);
+      }
+      const main = sizes.indexOf(Math.max(...sizes));
+      const mainIdx = []; for (let i = 0; i < nodes.length; i++) if (comp[i] === main) mainIdx.push(i);
+      for (let c = 0; c < sizes.length; c++) {
+        if (c === main) continue;
+        let best = { d: Infinity };
+        for (let i = 0; i < nodes.length; i++) { if (comp[i] !== c) continue;
+          for (const j of mainIdx) { const dd = d2(nodes[i], nodes[j]); if (dd < best.d) best = { d: dd, i, j }; } }
+        if (best.d <= BRIDGE) edge(best.i, best.j, { name: null, category: 'link' });
+      }
+    }
     return { nodes, adj, nVert };
   }
 
@@ -300,52 +319,50 @@ const GMCRouter = (() => {
   function route(g, from, to, mode) {
     // from/to: [lon,lat]; mode: 'walk' | 'drive'
     const ok = e => mode !== 'drive' || e.info.category !== 'Footpath';
-    const usable = new Uint8Array(g.nodes.length);
+    const N = g.nodes.length, OFF = 3;                 // walking off the mapped roads counts extra, so mapped roads are preferred
+    const usable = new Uint8Array(N);
     g.adj.forEach((es, i) => { if (es.some(ok)) usable[i] = 1; });
-    const s = nearestNode(g, from[0], from[1], i => usable[i]);
-    const t = nearestNode(g, to[0], to[1], i => usable[i]);
-    if (s.id < 0 || t.id < 0) return null;
-    const N = g.nodes.length, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), pinfo = new Array(N), plen = new Float64Array(N);
-    dist[s.id] = 0;
-    // binary heap
-    const heap = [[0, s.id]];
+    const F = toXY(from[0], from[1]), T = toXY(to[0], to[1]);
+    const sNear = nearestNode(g, from[0], from[1], i => usable[i]);
+    if (sNear.id < 0) return null;
+    const radius = Math.max(150, sNear.dist * 1.5);
+    const dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), pinfo = new Array(N), plen = new Float64Array(N);
+    const heap = [];
     const push = x => { heap.push(x); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
     const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+    // start from any road point within reach of the starting position
+    for (let i = 0; i < N; i++) { if (!usable[i]) continue; const d = d2(F, g.nodes[i]); if (d <= radius) { dist[i] = d * OFF; push([dist[i], i]); } }
     while (heap.length) {
       const [d, u] = pop(); if (d > dist[u]) continue;
       for (const e of g.adj[u]) { if (!ok(e)) continue; const nd = d + e.w; if (nd < dist[e.to]) { dist[e.to] = nd; prev[e.to] = u; pinfo[e.to] = e.info; plen[e.to] = e.len; push([nd, e.to]); } }
     }
-    let partial = false;
-    if (dist[t.id] === Infinity) {
-      // destination not connected: go as far as the network allows, to the reachable point closest to the destination
-      const goal = toXY(to[0], to[1]); let best = -1, bd = Infinity;
-      for (let i = 0; i < N; i++) { if (dist[i] === Infinity) continue; const dd = d2(goal, g.nodes[i]); if (dd < bd) { bd = dd; best = i; } }
-      if (best < 0) return { ok: false, startGap: s.dist, endGap: t.dist };
-      t.id = best; t.dist = bd; partial = true;
-    }
-    const seq = []; for (let v = t.id; v !== -1; v = prev[v]) seq.push(v); seq.reverse();
+    // finish at the road point that gives the shortest total trip, including the final walk
+    let end = -1, bestCost = Infinity;
+    for (let i = 0; i < N; i++) { if (dist[i] === Infinity) continue; const c = dist[i] + OFF * d2(T, g.nodes[i]); if (c < bestCost) { bestCost = c; end = i; } }
+    if (end < 0) return { ok: false };
+    const seq = []; for (let v = end; v !== -1; v = prev[v]) seq.push(v); seq.reverse();
     let netLen = 0; for (let i = 1; i < seq.length; i++) netLen += plen[seq[i]];
-    // steps
+    const startGap = d2(F, g.nodes[seq[0]]), endGap = d2(T, g.nodes[end]);
+    const partial = endGap > 400;
     const steps = [], coords = seq.map(i => toLL(...g.nodes[i]));
-    if (s.dist > 15) steps.push({ kind: 'walk', text: 'Walk to the start of the route', m: s.dist });
+    if (startGap > 15) steps.push({ kind: 'walk', text: 'Walk to the start of the route', m: startGap });
     let cur = null;
     for (let i = 1; i < seq.length; i++) {
       const info = pinfo[seq[i]], w = plen[seq[i]];
       if (info.category === 'connector') { if (cur) { cur.m += w; cur.i1 = i; } continue; }
+      if (info.category === 'link') { steps.push({ kind: 'walk', text: 'Walk across to the next road', m: w }); cur = null; continue; }
       if (cur && cur.name === info.name) { cur.m += w; cur.i1 = i; }
       else { cur = { kind: 'line', name: info.name, category: info.category, m: w, i0: i - 1, i1: i }; steps.push(cur); }
     }
-    if (partial) steps.push({ kind: 'gap', text: 'Continue to your destination. This last part is not on the mapped roads, so follow local roads and signs', m: t.dist });
-    else if (t.dist > 15) steps.push({ kind: 'walk', text: 'Walk to your destination', m: t.dist });
-    // fold very short pieces into the previous line step so the list stays readable
+    if (partial) steps.push({ kind: 'gap', text: 'Continue to your destination. This last part is not on the mapped roads, so follow local roads and signs', m: endGap });
+    else if (endGap > 15) steps.push({ kind: 'walk', text: 'Walk to your destination', m: endGap });
     const merged = [];
     steps.forEach(x => {
       const last = merged[merged.length - 1];
       if (x.kind === 'line' && x.m < 20 && last && last.kind === 'line') { last.m += x.m; last.i1 = x.i1; }
       else merged.push(x);
     });
-    return { ok: true, partial, coords, steps: merged, total: netLen + s.dist + t.dist, network: netLen, startGap: s.dist, endGap: t.dist,
-             fromLL: from, toLL: to };
+    return { ok: true, partial, coords, steps: merged, total: netLen + startGap + endGap, network: netLen, startGap, endGap, fromLL: from, toLL: to };
   }
   return { build, route, nearestNode };
 })();
@@ -418,20 +435,25 @@ require([
   view.ui.add(search, "top-left");
   search.on("select-result", () => { if (isPhone()) openSheet(false); });
 
-  let L = { points: null, lines: null, polygons: null, food: null };
+  let L = { points: null, lines: null, polygons: null, food: null, camp: null, camproad: null };
   let me = null;
 
-  webmap.load().then(() => {
+  webmap.load().then(async () => {
     if (CFG.USE_ESRI_IMAGERY) webmap.basemap = "hybrid";
     // open on Gelephu town and make the Home button return here
     view.when(() => view.goTo({ center: [90.495, 26.879], zoom: window.innerWidth < 900 ? 14 : 15 }, { animate: false })
       .then(() => { home.viewpoint = view.viewpoint.clone(); }));
     const feats = webmap.allLayers.filter(l => l.type === "feature");
     const find = word => feats.find(l => l.title.toLowerCase().includes(word));
-    L.food = find("food");
-    L.points = feats.find(l => l !== L.food && l.title.toLowerCase().includes("point"));
-    L.lines = feats.find(l => l !== L.food && l.title.toLowerCase().includes("line"));
-    L.polygons = feats.find(l => l !== L.food && l.title.toLowerCase().includes("polygon"));
+    await Promise.all(feats.toArray().map(l => l.load().catch(() => null)));
+    // the 45 AC campsite layers: found by title, or by their original Google Earth fields (FolderPath mentions "45 AC Campsite")
+    const isCamp45 = l => /45[ _]?ac|campsite|camp[ _]?road/i.test(l.title) || (hasField(l, "folderpath") && hasField(l, "popupinfo"));
+    L.camproad = feats.find(l => isCamp45(l) && l.geometryType === "polyline");
+    L.camp = feats.find(l => isCamp45(l) && l.geometryType === "polygon");
+    L.food = feats.find(l => /food/i.test(l.title) && l !== L.camp);
+    L.points = feats.find(l => l !== L.food && l !== L.camp && l !== L.camproad && l.title.toLowerCase().includes("point"));
+    L.lines = feats.find(l => l !== L.food && l !== L.camp && l !== L.camproad && l.title.toLowerCase().includes("line"));
+    L.polygons = feats.find(l => l !== L.food && l !== L.camp && l !== L.camproad && l.title.toLowerCase().includes("polygon"));
     if (!L.points || !L.polygons) {
       showMsg('Layers not found', 'The web map needs layers whose titles contain "Points", "Lines" and "Polygons".');
       return;
@@ -465,9 +487,10 @@ require([
   const COLORS = {
     "Venue parking":"#2563C9","Event parking":"#2563C9","East side parking":"#2563C9",
     "Taxi stand":"#7B4FB5","Bus & taxi stand":"#0F7C80","Bus parking":"#0F7C80",
-    "Toilet":"#00838F","Tented accommodation":"#6A3D9A","Campsite":"#333333","Food stall":"#2E8B57"
+    "Toilet":"#00838F","Tented accommodation":"#6A3D9A","Campsite":"#333333","Food stall":"#2E8B57",
+    "Tent":"#6A3D9A","Food court":"#2E8B57","Toilets":"#00838F","Support facility":"#C8102E","Holding area":"#8D6E63"
   };
-  const GLYPH = {"Taxi stand":"T","Bus & taxi stand":"B","Bus parking":"B","Toilet":"WC","Tented accommodation":"▲","Campsite":"▲","Food stall":"F"};
+  const GLYPH = {"Taxi stand":"T","Bus & taxi stand":"B","Bus parking":"B","Toilet":"WC","Tented accommodation":"▲","Campsite":"▲","Food stall":"F","Tent":"▲","Food court":"F","Toilets":"WC","Support facility":"+","Holding area":"H"};
   const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   function dist(a, b){
     const R=6371000, r=Math.PI/180, dLa=(b[0]-a[0])*r, dLo=(b[1]-a[1])*r;
@@ -487,6 +510,7 @@ require([
     { id: "walk", label: "Footpaths", c: "#2E8540", g: "⋯", cats: { lines: ["Footpath"] } },
     { id: "toilets", label: "Toilets and amenities", c: "#00838F", g: "WC", cats: { points: ["Toilet", "Smoking area"] } },
     { id: "food", label: "Food stalls", c: "#2E8B57", g: "F", layer: "food" },
+    { id: "camp45", label: "45 AC campsite", c: "#8D6E63", g: "▲", layers: ["camp", "camproad"] },
     { id: "stay", label: "Tented stays and campsite", c: "#6A3D9A", g: "▲", cats: { polygons: ["Tented accommodation", "Campsite"] } },
     { id: "sacred", label: "Sacred sites", c: "#1F4E79", g: "☸", cats: { polygons: ["Sacred site"] } },
     { id: "chorten", label: "108 Chortens", c: "#B8860B", g: "☸", layerTitle: "chorten" },
@@ -511,6 +535,7 @@ require([
     TOGGLES.forEach(t => {
       let lyr = null;
       if (t.layer) lyr = L[t.layer];
+      if (t.layers) t.layers.forEach(k => { if (L[k]) L[k].visible = tgState[t.id] !== false; });
       if (t.layerTitle) lyr = webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle));
       if (t.overlay) lyr = restrictedLayer;
       if (lyr) lyr.visible = tgState[t.id] !== false;
@@ -540,8 +565,8 @@ require([
   ];
   async function buildToggles(){
     const box = document.getElementById('toggles'); if (!box) return;
-    const lyrFor = t => t.layer ? L[t.layer] : (t.layerTitle ? webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle)) : null);
-    const available = TOGGLES.filter(t => (t.layer || t.layerTitle) ? !!lyrFor(t) : true);
+    const lyrFor = t => t.layer ? L[t.layer] : (t.layers ? (L[t.layers[0]] || L[t.layers[1]]) : (t.layerTitle ? webmap.allLayers.find(l => l.type === "feature" && l.title.toLowerCase().includes(t.layerTitle)) : null));
+    const available = TOGGLES.filter(t => (t.layer || t.layers || t.layerTitle) ? !!lyrFor(t) : true);
     await Promise.all(webmap.allLayers.filter(l => l.type === "feature").toArray().map(l => l.load().catch(() => null)));
     available.forEach(t => { if (!(t.id in tgState)) tgState[t.id] = true; });
     // collect legend items per group: points first, then lines, then areas
@@ -549,6 +574,7 @@ require([
       let items = [];
       if (t.cats) ["points", "lines", "polygons"].forEach(k => { if (t.cats[k] && L[k]) items = items.concat(rendererItems(L[k], t.cats[k])); });
       else if (t.overlay) items = RESTRICTED_SYMBOLS.map(x => ({ ...x }));
+      else if (t.layers) t.layers.forEach(k => { if (L[k]) items = items.concat(rendererItems(L[k], null)); });
       else items = rendererItems(lyrFor(t), null);
       // one entry per label
       const seen = new Set(); items = items.filter(i => { const k = i.label; if (seen.has(k)) return false; seen.add(k); return true; });
@@ -598,6 +624,16 @@ require([
         a.name = sn ? "Food stall " + String(sn).replace(/\D/g, "") : "Food stall";
       }
     }
+    if (lyr && (lyr === L.camp || lyr === L.camproad)) {
+      const folder = String(get("folderpath") || "");
+      const grp = folder.split("/").pop();
+      const MAP = { "Original boundary": "Campsite boundary", "Accommodation": "Tent", "Food courts": "Food court", "Toilets": "Toilets",
+        "Holding areas": "Holding area", "Support facilities": "Support facility", "Registration": "Support facility", "Access and service road": "Camp road" };
+      if (!a.name) a.name = String(get("name") || "").replace("45 ac campsite — original supplied boundary", "45 AC campsite");
+      if (!a.category) a.category = lyr === L.camproad ? "Camp road" : (MAP[grp] || grp || "Campsite");
+      if (!a.section) a.section = grp || "45 AC campsite";
+      if (!a.toilets && a.category === "Toilets") { const m = /\((\d+)\)/.exec(a.name); if (m) a.toilets = +m[1]; }
+    }
     if ((!a.lat || !a.lon) && f.geometry) {
       const g = f.geometry.type === "point" ? f.geometry : (f.geometry.centroid || f.geometry.extent.center);
       if (g) { a.lat = g.latitude; a.lon = g.longitude; }
@@ -610,9 +646,10 @@ require([
     { title: "Parking", layer: "points", cats: ["Venue parking", "Event parking"] },
     { title: "Parking areas", layer: "polygons", cats: ["Event parking", "East side parking"] },
     { title: "Bus & taxi stands", layer: "points", cats: ["Taxi stand", "Bus & taxi stand", "Bus parking"] },
-    { title: "Toilets", layer: "points", cats: ["Toilet"] },
-    { title: "Food stalls", layer: "food", cats: ["Food stall"] },
-    { title: "Tented stays", layer: "polygons", cats: ["Tented accommodation", "Campsite"] }
+    { title: "Toilets", layer: "points", cats: ["Toilet"], extra: [{ layer: "camp", cats: ["Toilets"] }] },
+    { title: "Food stalls", layer: "food", cats: ["Food stall"], extra: [{ layer: "camp", cats: ["Food court"] }] },
+    { title: "Tented stays", layer: "polygons", cats: ["Tented accommodation", "Campsite"], extra: [{ layer: "camp", cats: ["Tent"] }] },
+    { title: "Campsite help points", layer: "camp", cats: ["Support facility", "Holding area"] }
   ];
   const nearCache = {};
   async function renderNear(){
@@ -622,13 +659,19 @@ require([
     document.getElementById('useLoc').textContent = me ? 'Update my location' : 'Use my location';
     let html = '';
     for (const g of GROUPS) {
-      const lyr = L[g.layer]; if (!lyr) continue;
       const key = g.title;
       if (!nearCache[key]) {
-        const q = lyr.createQuery();
-        q.where = (hasField(lyr, "category") ? `category IN (${inList(g.cats)})` : "1=1") + (baseExpr(lyr) ? ` AND (${baseExpr(lyr)})` : '');
-        q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
-        try { nearCache[key] = (await lyr.queryFeatures(q)).features.map(f => normAttrs(f, lyr)); } catch (e) { console.error(e); nearCache[key] = []; }
+        nearCache[key] = [];
+        for (const src of [{ layer: g.layer, cats: g.cats }].concat(g.extra || [])) {
+          const lyr = L[src.layer]; if (!lyr) continue;
+          const q = lyr.createQuery();
+          q.where = (hasField(lyr, "category") ? `category IN (${inList(src.cats)})` : "1=1") + (baseExpr(lyr) ? ` AND (${baseExpr(lyr)})` : '');
+          q.outFields = ["*"]; q.returnGeometry = true; q.outSpatialReference = view.spatialReference;
+          try {
+            const got = (await lyr.queryFeatures(q)).features.map(f => normAttrs(f, lyr));
+            nearCache[key] = nearCache[key].concat(hasField(lyr, "category") ? got : got.filter(f => src.cats.includes(f.attributes.category)));
+          } catch (e) { console.error(e); }
+        }
       }
       const seen = new Set();
       const items = nearCache[key]
@@ -644,6 +687,7 @@ require([
         const stand = ["Taxi stand","Bus & taxi stand","Bus parking"].includes(a.category);
         const title = stand && a.descr ? a.descr : a.name;
         let sub = a.category === "Food stall" && a.location ? `${a.location}${a.stall_type ? ' · ' + a.stall_type : ''}` : a.category;
+        if (a.section) sub = `45 AC campsite · ${a.category}` + (a.toilets ? ` · ${a.toilets} toilets` : '');
         if (a.cap_veh > 0) sub += ` · ${a.cap_veh} vehicles`;
         if (a.cap_people > 0) sub += ` · ${Number(a.cap_people).toLocaleString()} people`;
         const rTag = a.audience === "Coordinators" ? ' <span class="rtag">Restricted</span>' : '';
@@ -732,12 +776,16 @@ require([
     q.where = `category IN (${inList(ROUTE_CATS)}) AND audience = 'Public'`; // never route over restricted roads
     q.outFields = ["name", "category"]; q.returnGeometry = true; q.outSpatialReference = { wkid: 4326 };
     try {
-      const fs = (await L.lines.queryFeatures(q)).features;
-      graph = GMCRouter.build(fs.map(f => ({ name: f.attributes.name, category: f.attributes.category, paths: f.geometry.paths })), { snap: 50 });
+      let fs = (await L.lines.queryFeatures(q)).features;
+      if (L.camproad) {
+        const q2 = L.camproad.createQuery(); q2.where = "1=1"; q2.outFields = ["*"]; q2.returnGeometry = true; q2.outSpatialReference = { wkid: 4326 };
+        try { fs = fs.concat((await L.camproad.queryFeatures(q2)).features.map(f => { f.attributes.category = "Camp road"; return f; })); } catch (e) { console.error(e); }
+      }
+      graph = GMCRouter.build(fs.map(f => ({ name: f.attributes.name || f.attributes.Name, category: f.attributes.category, paths: f.geometry.paths })), { snap: 50, bridge: 200 });
     } catch (e) { console.error(e); document.getElementById('routeHint').textContent = 'The route network could not be loaded.'; }
   }
   function setupRouteAction(){
-    [L.points, L.polygons].forEach(l => {
+    [L.points, L.polygons, L.food, L.camp].forEach(l => {
       if (!l || !l.popupTemplate) return;
       l.popupTemplate.actions = [{ id: "route-here", title: "Route here", icon: "walking", type: "button" }];
     });
@@ -775,22 +823,23 @@ require([
   document.getElementById('mWalk').onclick = () => { rtMode = "walk"; modeBtns(); runRoute(); };
   document.getElementById('mDrive').onclick = () => { rtMode = "drive"; modeBtns(); runRoute(); };
   function modeBtns(){ document.getElementById('mWalk').setAttribute('aria-pressed', rtMode === 'walk'); document.getElementById('mDrive').setAttribute('aria-pressed', rtMode === 'drive'); }
-  const CAT_COL = { "D-Day bus to Zeray":"#C27C00","Event shuttle":"#C27C00","Public bus route":"#0F7C80","Traffic diversion":"#C8102E","Footpath":"#2E8540","Parking access road":"#2563C9","Contingency parking":"#2563C9" };
-  const CAT_TXT = { "D-Day bus to Zeray":"event bus road","Event shuttle":"shuttle road","Public bus route":"bus route road","Traffic diversion":"diversion road","Footpath":"footpath","Parking access road":"parking access road","Contingency parking":"parking road" };
+  const CAT_COL = { "D-Day bus to Zeray":"#C27C00","Event shuttle":"#C27C00","Public bus route":"#0F7C80","Traffic diversion":"#C8102E","Footpath":"#2E8540","Parking access road":"#2563C9","Contingency parking":"#2563C9","Camp road":"#8D6E63" };
+  const CAT_TXT = { "D-Day bus to Zeray":"event bus road","Event shuttle":"shuttle road","Public bus route":"bus route road","Traffic diversion":"diversion road","Footpath":"footpath","Parking access road":"parking access road","Contingency parking":"parking road","Camp road":"campsite road" };
   /* places for the route pickers */
   const PLACE_GROUPS = [
     { key: "venue", title: "Zeray venue", cats: ["Venue structure"] },
     { key: "parking", title: "Parking", cats: ["Venue parking", "Event parking", "East side parking"] },
     { key: "stand", title: "Bus and taxi", cats: ["Taxi stand", "Bus & taxi stand", "Bus parking", "Shuttle pick-up", "Bus & taxi depot"] },
-    { key: "toilet", title: "Toilets and amenities", cats: ["Toilet", "Smoking area"] },
-    { key: "food", title: "Food stalls", cats: ["Food stall"] },
-    { key: "stay", title: "Tented stays", cats: ["Tented accommodation", "Campsite"] },
+    { key: "toilet", title: "Toilets and amenities", cats: ["Toilet", "Smoking area", "Toilets"] },
+    { key: "food", title: "Food stalls and food courts", cats: ["Food stall", "Food court"] },
+    { key: "stay", title: "Tented stays", cats: ["Tented accommodation", "Campsite", "Tent"] },
+    { key: "camp", title: "45 AC campsite help points", cats: ["Support facility", "Holding area", "Campsite boundary"] },
     { key: "sacred", title: "Sacred sites", cats: ["Sacred site"] }
   ];
   let places = [];
   async function loadPlaces(){
     const all = [];
-    for (const lyr of [L.points, L.polygons, L.food]) {
+    for (const lyr of [L.points, L.polygons, L.food, L.camp]) {
       if (!lyr) continue;
       const q = lyr.createQuery();
       q.where = (CFG.PUBLIC_ONLY && lyr.fields.some(f => f.name === "audience") ? "audience = 'Public'" : "1=1");
@@ -800,7 +849,7 @@ require([
     const seen = new Set();
     places = all.filter(a => a.lat && a.lon).map(a => {
       const stand = ["Taxi stand", "Bus & taxi stand", "Bus parking"].includes(a.category);
-      const label = stand && a.descr ? a.descr : (a.category === "Food stall" && a.location ? `${a.name} – ${a.location}` : a.name);
+      const label = stand && a.descr ? a.descr : (a.category === "Food stall" && a.location ? `${a.name} – ${a.location}` : (a.section ? `${a.name} (45 AC campsite)` : a.name));
       const grp = PLACE_GROUPS.find(g => g.cats.includes(a.category));
       const restricted = a.audience === "Coordinators";
       return { label: restricted ? label + " (restricted)" : label, cat: a.category, grp: grp ? grp.key : null, ll: [a.lon, a.lat], restricted };
