@@ -826,20 +826,53 @@ require([
     rtTo = { ll: best.ll, label: best.label }; runRoute();
   });
 
+  /* destination pin (red map pin) */
+  const PIN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="56" viewBox="0 0 40 56">' +
+    '<ellipse cx="20" cy="53" rx="7" ry="2.5" fill="#000" fill-opacity=".25"/>' +
+    '<path d="M20 1.5C10 1.5 2 9.3 2 19.2 2 32.5 20 53 20 53s18-20.5 18-33.8C38 9.3 30 1.5 20 1.5z" fill="#EA4335" stroke="#B3261E" stroke-width="2"/>' +
+    '<circle cx="20" cy="19" r="7" fill="#A50E0E"/></svg>';
+  const destPin = ll => new Graphic({ geometry: { type: "point", longitude: ll[0], latitude: ll[1] },
+    symbol: { type: "picture-marker", url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(PIN_SVG), width: 28, height: 39, yoffset: 19 } });
+
+  /* while a route is shown, hide all other map layers (and bring them back afterwards) */
+  let routeFocus = null;
+  function setRouteFocus(on){
+    if (on && !routeFocus) {
+      routeFocus = new Map();
+      webmap.allLayers.forEach(l => {
+        if (l === routeLayer || l === navLayer || l.type === "group") return;
+        if (l.type === "feature" || l === restrictedLayer) { routeFocus.set(l, l.visible); l.visible = false; }
+      });
+      showLayersBtn(false);
+    } else if (!on && routeFocus) {
+      routeFocus.forEach((vis, l) => { l.visible = vis; });
+      routeFocus = null;
+    }
+  }
+  function showLayersBtn(shown){
+    const b = document.getElementById('rtLayers'); if (b) b.textContent = shown ? 'Hide map layers' : 'Show map layers';
+  }
+  function toggleRouteLayers(){
+    if (!routeFocus) return;
+    const anyHidden = [...routeFocus.keys()].some(l => !l.visible);
+    routeFocus.forEach((vis, l) => { l.visible = anyHidden ? vis : false; });
+    showLayersBtn(anyHidden);
+  }
+
   function runRoute(){
     document.getElementById('rtFrom').textContent = rtFrom ? rtFrom.label : 'Not set';
     document.getElementById('rtTo').textContent = rtTo ? rtTo.label : 'Not set';
     const out = document.getElementById('rtResult');
     routeLayer.removeAll();
     lastRoute = null;
-    if (!rtFrom || !rtTo) { out.innerHTML = ''; return; }
+    if (!rtFrom || !rtTo) { out.innerHTML = ''; setRouteFocus(false); return; }
     if (!graph) { out.innerHTML = '<div class="warn">The route network is still loading. Try again in a moment.</div>'; return; }
     const r = GMCRouter.route(graph, rtFrom.ll, rtTo.ll, rtMode);
     const pt = (ll, color) => new Graphic({ geometry: { type: "point", longitude: ll[0], latitude: ll[1] },
       symbol: { type: "simple-marker", size: 14, color, outline: { color: "#fff", width: 2.5 } } });
     if (!r || !r.ok) {
       out.innerHTML = '<div class="warn">No route could be found from this starting point. Try a different start, or follow signs and marshals.</div>';
-      routeLayer.addMany([pt(rtFrom.ll, "#1A73E8"), pt(rtTo.ll, "#6E1E2B")]);
+      routeLayer.addMany([pt(rtFrom.ll, "#1A73E8"), destPin(rtTo.ll)]);
       return;
     }
     const line = (paths, color, width, style) => new Graphic({ geometry: { type: "polyline", paths, spatialReference: { wkid: 4326 } },
@@ -849,8 +882,9 @@ require([
       line([r.coords], "#6E1E2B", 5, "solid"),
       line([[rtFrom.ll, r.coords[0]]], "#56636A", 3, "short-dot"),
       line([[r.coords[r.coords.length - 1], rtTo.ll]], "#56636A", 3, "short-dot"),
-      pt(rtFrom.ll, "#1A73E8"), pt(rtTo.ll, "#6E1E2B")
+      pt(rtFrom.ll, "#1A73E8"), destPin(rtTo.ll)
     ]);
+    setRouteFocus(true);
     if (!nav) view.goTo(routeLayer.graphics.toArray().map(g => g.geometry)).catch(() => {});
     const speed = rtMode === "walk" ? 80 : 333; // metres per minute
     const partialNote = r.partial ? `<div class="warn" style="margin:0 0 8px">The mapped event roads don't reach this place. The route takes you to the closest point they do reach; the rest is shown as a dotted line.</div>` : '';
@@ -868,9 +902,11 @@ require([
     });
     h += `<div class="step"><i style="background:#6E1E2B">✓</i><div>Arrive at <b>${esc(rtTo.label)}</b></div></div>`;
     h += `<p class="hint" style="margin-top:10px">Routes follow the event plan's mapped roads and paths only. Road closures and one-way systems on the day may differ; follow police and marshal instructions.</p>`;
-    h += `<button class="chip-btn" id="rtClear" style="margin-top:4px">Clear route</button>`;
+    h += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px"><button class="chip-btn" id="rtLayers">Show map layers</button><button class="chip-btn" id="rtClear">Clear route</button></div>`;
     out.innerHTML = h;
-    document.getElementById('rtClear').onclick = () => { stopNav(); rtFrom = rtTo = null; lastRoute = null; routeLayer.removeAll(); runRoute(); };
+    document.getElementById('rtClear').onclick = () => { stopNav(); rtFrom = rtTo = null; lastRoute = null; routeLayer.removeAll(); setRouteFocus(false); runRoute(); };
+    document.getElementById('rtLayers').onclick = toggleRouteLayers;
+    if (routeFocus) showLayersBtn([...routeFocus.keys()].some(l => l.visible));
     document.getElementById('rtViewMap').onclick = viewOnMap;
     document.getElementById('rtStart').onclick = startNav;
   }
